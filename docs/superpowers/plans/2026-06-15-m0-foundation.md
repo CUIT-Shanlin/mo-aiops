@@ -1774,13 +1774,14 @@ def _clear_settings_cache():
     get_settings.cache_clear()
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 async def app_instance():
-    """会话级 app：lifespan 只跑一次（建 engine/redis + 迁移），避免每测重建。
+    """函数级 app：每测跑一次 lifespan（建 engine/redis + 幂等迁移）。
 
-    仅被需要 DB/Redis 的集成测试（经 client fixture）触发，
-    纯单元测试（config/constants/response/security/project_context/logging/repositories）
-    不依赖它，故不需要 DB 在场。
+    刻意不用 session 作用域：session 级 async fixture 与 function 级
+    client/_clean 跨事件循环会触发 "Event loop is closed" / "Future attached
+    to a different loop"。迁移幂等，每测重建换来 engine/redis 与测试同循环，
+    正确性优先于速度。
     """
     from app.main import get_app
 
@@ -1826,7 +1827,11 @@ def make_jwt():
     return _make
 ```
 
-> session 级 `app_instance` 需 pytest-asyncio 的 event loop 覆盖到 session 作用域。`asyncio_mode = "auto"`（Task 1）下，session 级 async fixture 会自动获得 session 级 loop；若运行时报 loop scope 不匹配，在 `pyproject.toml` 的 `[tool.pytest.ini_options]` 加 `asyncio_default_fixture_loop_scope = "session"`。
+> **作用域决策（实现期定稿）**：`app_instance` 用 **函数级**，不用 session 级。
+> session 级 async fixture 与 function 级 `client`/`_clean_db_and_redis` 跨事件循环会触发
+> "Event loop is closed"（session engine/redis 绑在别的 loop，ping 失败 → health 返回 degraded，
+> 且打断已有的 test_redis function-loop fixtures）。迁移幂等，每测重建 lifespan 是安全的，
+> 用一点速度换 engine/redis 与测试同循环的正确性。`asyncio_default_fixture_loop_scope` 无需设置。
 
 - [ ] **Step 3: Run full test suite**
 
