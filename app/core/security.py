@@ -1,0 +1,39 @@
+"""PyJWT HS256 鉴权依赖（MVP 仅 admin）。"""
+import jwt
+from fastapi import Header
+from pydantic import BaseModel
+
+from app.core.config import get_settings
+from app.core.constants import ErrorCode
+from app.schemas.response import APIError
+
+
+class CurrentUser(BaseModel):
+    """已鉴权用户身份。"""
+
+    user_id: str | None
+    role: str
+
+
+def decode_and_verify(token: str, secret: str, algorithm: str) -> CurrentUser:
+    """解码 JWT，校验签名/过期/角色。失败抛 APIError。"""
+    try:
+        payload = jwt.decode(token, secret, algorithms=[algorithm])
+    except jwt.ExpiredSignatureError:
+        raise APIError(ErrorCode.UNAUTHORIZED, "token expired")
+    except jwt.InvalidTokenError:
+        raise APIError(ErrorCode.UNAUTHORIZED, "invalid token")
+    if payload.get("role") != "admin":
+        raise APIError(ErrorCode.FORBIDDEN, "admin role required")
+    return CurrentUser(user_id=payload.get("sub"), role="admin")
+
+
+async def get_current_user(
+    authorization: str | None = Header(default=None),
+) -> CurrentUser:
+    """FastAPI 依赖：从 Authorization: Bearer 取 token 并校验。"""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise APIError(ErrorCode.UNAUTHORIZED, "missing bearer token")
+    token = authorization.removeprefix("Bearer ").strip()
+    settings = get_settings()
+    return decode_and_verify(token, settings.jwt_secret, settings.jwt_algorithm)
