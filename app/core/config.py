@@ -1,9 +1,9 @@
 """启动期静态配置（pydantic-settings 单一来源）。"""
 from functools import lru_cache
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -35,15 +35,16 @@ class Settings(BaseSettings):
     llm_model: str | None = None
 
     # 横切
-    cors_origins: list[str] = ["*"]
+    cors_origins: Annotated[list[str], NoDecode] = ["*"]
     log_format: Literal["dev", "json"] = "json"
     environment: Literal["dev", "prod"] = "dev"
 
     @field_validator("cors_origins", mode="before")
     @classmethod
     def _split_cors(cls, v: object) -> object:
-        """允许 env 用逗号分隔字符串（如 CORS_ORIGINS=*,http://x）；
-        否则 pydantic-settings 要求 JSON，`*` 会直接报错。"""
+        """允许 env 用逗号分隔字符串（如 CORS_ORIGINS=*,http://x）。
+        NoDecode 关掉 pydantic-settings 对复杂类型的 JSON 预解码，
+        否则 `*` 会在 source 层就报错（validator 根本来不及跑）。"""
         if isinstance(v, str):
             return [item.strip() for item in v.split(",") if item.strip()]
         return v
