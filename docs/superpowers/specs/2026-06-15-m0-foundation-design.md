@@ -69,11 +69,15 @@ app/
     __init__.py
     base.py              # DeclarativeBase（Alembic metadata 源）
     project.py           # Project ORM（projects 表）
+  repositories/
+    __init__.py
+    base.py              # ProjectScopedRepository 隔离基类（M0 立基类，M1+ 继承）
   api/
     __init__.py
     health.py            # /health + /metrics 占位 + /api/whoami 探针
   db/
     __init__.py
+    migrate.py           # 代码内 alembic upgrade head 入口（lifespan 调用）
     migrations/          # Alembic：env.py + versions/0001_create_projects.py
 docker/
   docker-compose.yml     # postgres + redis
@@ -100,19 +104,20 @@ pydantic-settings `Settings`（`@lru_cache` 单例），`.env` 加载，回退�
 - `redis_url: str`（必填）；`redis_db: int = 1`
 - `jwt_secret: str`（必填，缺失启动失败）；`jwt_algorithm: str = "HS256"`
 - `java_service_internal_token: str | None = None`
+- `datasource_secret_key: str | None = None`（M0 留位，M1 接入 cryptography 解密数据源凭证时启用）
 - `llm_provider/llm_api_key/llm_base_url/llm_model`（M0 可选，留位）
-- `cors_origins: list[str] = ["*"]`（dev）
+- `cors_origins: list[str] = ["*"]`（dev）；`field_validator` 支持 env 用逗号分隔字符串（如 `CORS_ORIGINS=*`），否则 pydantic-settings 要求 JSON、裸 `*` 会启动即崩
 - `log_format: Literal["dev","json"] = "json"`
 - `environment: Literal["dev","prod"] = "dev"`
 
-约束：敏感字段（jwt_secret/llm_api_key/java token）不得进日志。
+约束：敏感字段（jwt_secret/llm_api_key/java token/datasource_secret_key）不得进日志。
 
 ### 4.2 `core/constants.py`
 
 常量单点声明（M0 范围）：
-- `class ErrorCode(IntEnum)`：`SUCCESS=0`、`INVALID_PROJECT=4001`、`UNAUTHORIZED=4010`、`FORBIDDEN=4030`、`VALIDATION_ERROR=4220`、`INTERNAL=5000`
+- `class ErrorCode(IntEnum)`：`SUCCESS=0`、`INVALID_PROJECT=4001`、`UNAUTHORIZED=4010`、`FORBIDDEN=4030`、`VALIDATION_ERROR=4220`、`INTERNAL=5000`。**分段规约**（后续按域扩展，避免拍脑袋编号）：`40xx`=鉴权/上下文、`41xx`=告警域、`42xx`=自愈域/请求校验、`43xx`=Agent 域、`5xxx`=系统。
 - `SERVICE_NAME = "mo-chat-aiops"`
-- `def redis_key(project_id: str, suffix: str) -> str`：返回 `aiops:{project_id}:{suffix}`（单点拼接，禁散落硬编码）
+- `class RedisKey`：key 后缀**单点常量**（`AGENT_STATUS`/`INGEST`/`ALERTS`/`TOPOLOGY_CACHE`/`CONFIG`/`WS_AGENT`/`WS_HEAL`/`RECENT_ERRORS` 等，后续里程碑登记于此）+ `RedisKey.of(project_id, suffix)` 拼接 `aiops:{project_id}:{suffix}`。调用点引用常量，禁散落字面量（落地「key 模板单点声明」硬约束）。
 
 ### 4.3 `core/logging.py`
 
@@ -146,17 +151,23 @@ pydantic-settings `Settings`（`@lru_cache` 单例），`.env` 加载，回退�
 
 ### 4.7 `core/project_context.py`
 
-- `get_project_id`：FastAPI 依赖。
-  - 从 header `X-Project-Id` 取（WS 场景另走 query，M0 不实现 WS）。
-  - 缺失或非合法 UUID → `APIError(INVALID_PROJECT, 4001, "missing or invalid project")`。
-  - 返回 `str(project_id)`。M0 不查库；M1 接入 projects 仓库做存在性校验。
+- 纯函数 `resolve_project_id(raw) -> str`：校验存在 + UUID 格式，缺失/非法抛 `APIError(INVALID_PROJECT, 4001)`。**纯函数与依赖分离**，便于 M5 WebSocket 从 `?project_id=` 取值后直接复用（同理 `security.decode_and_verify` 供 WS `?token=` 复用）。
+- `get_project_id`：FastAPI 依赖。从 header `X-Project-Id` 取 → 调 `resolve_project_id` → `set_project_id` 注入日志 contextvar → 返回。
+  - WS 路径复用 `resolve_project_id` 时需自行补 `set_project_id`/`set_trace_id`（依赖注入不覆盖 WS）。
+  - M0 不查库；M1 接入 projects 仓库做存在性校验。
 
 ### 4.8 `schemas/response.py`
 
 - `class APIError(Exception)`：携带 `code: int`、`message: str`、`detail: Any = None`、`http_status: int = 200`。
-- `def success(data: Any) -> dict`：`{"code": 0, "data": data}`。
+- `class ApiResponse(BaseModel, Generic[T])`：`{code:0, data}` 类型化信封，供路由声明 `response_model=ApiResponse[XxxData]`，让 FastAPI 自动生成 OpenAPI schema（契约即文档，AGENTS.md §9）。
+- `class ErrorResponse(BaseModel)`：`{code, message, detail}` 失败信封。
+- `def success(data: Any) -> dict`：便捷构造 `{"code": 0, "data": data}`。
 - `class Page(BaseModel, Generic[T])`：`{total, page, size, items}`。
 - 时间统一 ISO 8601 UTC（在序列化层约定，model 用 `datetime`，JSON encoder 输出 `...Z`）。
+
+### 4.8a `repositories/base.py`（隔离基础设施）
+
+- `class ProjectScopedRepository`：业务表仓库基类，构造期绑定 `session + project_id`，子类设 `project_column`，查询经 `scope(stmt)` 强制注入 `WHERE project_id`。让「漏写 project_id」在构造期不可能（兑现 §2 承诺）。M0 仅立基类 + 测试，M1+ 业务仓库继承。`projects` 表本身无 project_id，是唯一例外，不继承此基类。
 
 ### 4.9 `models/base.py` + `models/project.py`
 
@@ -167,7 +178,7 @@ pydantic-settings `Settings`（`@lru_cache` 单例），`.env` 加载，回退�
   - `slug: Mapped[str]`（unique）
   - `enabled: Mapped[bool]`（默认 True）
   - `metric_profile: Mapped[str]`（默认 `"java"`）
-  - `datasource_config: Mapped[dict]`（JSONB，默认 `{}`；加密细节留 M1）
+  - `datasource_config: Mapped[dict[str, Any]]`（JSONB，默认 `{}`；加密细节留 M1，解密密钥经 `Settings.datasource_secret_key` 留位）
   - `created_at` / `updated_at: Mapped[datetime]`（server_default now / onupdate）
 - M0 只建表结构，CRUD 业务留 M1。
 
@@ -184,7 +195,7 @@ pydantic-settings `Settings`（`@lru_cache` 单例），`.env` 加载，回退�
   1. `setup_logging(settings)`
   2. 建 async engine + sessionmaker → `app.state`
   3. 建 redis → `app.state`
-  4. `run_migrations()`：代码内 `alembic.command.upgrade(config, "head")`，`config.set_main_option("script_location", <abs path>)` 修正路径
+  4. `run_migrations()`：代码内 `alembic.command.upgrade(config, "head")`（封装为 `app/db/migrate.py:run_upgrade_head`），`config.set_main_option("script_location", <abs path>)` 修正路径。**必须 `await asyncio.to_thread(run_upgrade_head)`**——env.py 在线模式用 `asyncio.run()` 建临时 loop，直接在 lifespan 运行中的事件循环里同步调用会抛 `RuntimeError`，丢到线程执行可规避并避免阻塞事件循环。
   5. `ping_db` / `ping_redis`（失败记 WARN，不阻断启动）
   6. `yield`
   7. `await engine.dispose()` + `await redis.aclose()`
@@ -242,23 +253,35 @@ REDIS_DB=1
 JWT_SECRET=change-me-shared-with-java
 LOG_FORMAT=dev
 ENVIRONMENT=dev
+# 逗号分隔，Settings 的 field_validator 拆成 list
+CORS_ORIGINS=*
 ```
 
 ---
 
 ## 7. 测试策略
 
-pytest + pytest-asyncio + httpx.AsyncClient。需 DB/Redis（docker-compose 起的实例；测试 env 指向本地）。
+pytest + pytest-asyncio + httpx.AsyncClient。集成测试（health/whoami）需 DB/Redis（docker-compose 起的实例；测试 env 指向本地）；纯单元测试不依赖 DB 在场。
 
 | 测试文件 | 覆盖 |
 |---|---|
 | `test_config.py` | Settings 正常加载；缺 `JWT_SECRET` 抛错 |
+| `test_constants.py` | ErrorCode 值；`RedisKey.of` 拼接 |
 | `test_security.py` | HS256 验签通过；过期 token → 4010；非 admin → 4030；缺 token → 4010 |
 | `test_project_context.py` | 缺 `X-Project-Id` → 4001；非 UUID → 4001；合法 UUID 通过 |
-| `test_response.py` | `success()` 包装；`APIError` → `{code,message,detail}`；`Page` 结构 |
+| `test_response.py` | `success()` 包装；`ApiResponse`/`ErrorResponse` 模型；`APIError`；`Page` 结构 |
+| `test_repositories.py` | `ProjectScopedRepository.scope` 注入 `WHERE project_id`；构造绑定 |
+| `test_models.py` | projects 表注册进 metadata + 字段齐全 |
+| `test_migrations.py` | `run_upgrade_head`（经 `to_thread`）后 projects 表存在（asyncpg 断言） |
+| `test_db.py` / `test_redis.py` | `ping_db`/`ping_redis` + session/客户端基本读写 |
+| `test_logging.py` | JSON 日志含 `service` + `trace_id` |
 | `test_health.py` | `/health` 真实连通 DB/Redis；`/metrics` 占位可访问 |
 | `test_whoami.py` | 端到端：合法 admin + 合法 project → 200 `{code:0}`；缺任一 → 对应错误码 |
-| `conftest.py` | async fixtures：测试 engine（建表/清理）、`AsyncClient`、`make_jwt(role, exp)` 工具 |
+| `conftest.py` | async fixtures：会话级 `app_instance`（lifespan 跑一次）、`client`（用后 TRUNCATE/清 Redis）、`make_jwt`、autouse `_clear_settings_cache` 防 lru_cache 跨测试污染 |
+
+**关键约束**：
+- 迁移在 lifespan / async 测试里必须 `await asyncio.to_thread(run_upgrade_head)`，env.py 在线模式用 `asyncio.run()`，直接在运行中的 loop 调会 `RuntimeError`。
+- 测试间隔离：`client` 依赖 `_clean_db_and_redis`，测试后 TRUNCATE projects + 清 `aiops:*` Redis key；`_clear_settings_cache` autouse 清 `get_settings` 缓存。
 
 完成前跑 `uv run pytest`、`uv run ruff check .`、`uv run mypy app`。
 

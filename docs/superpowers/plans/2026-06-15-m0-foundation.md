@@ -24,14 +24,16 @@
 | `app/schemas/response.py` | APIError + success() + Page |
 | `app/models/base.py` | DeclarativeBase |
 | `app/models/project.py` | Project ORM |
+| `app/repositories/base.py` | ProjectScopedRepository 隔离基类（防漏写 project_id） |
 | `app/api/health.py` | /health + /metrics + /api/whoami |
 | `app/main.py` | get_app 工厂 + lifespan + 异常处理 |
+| `app/db/migrate.py` | 代码内 alembic upgrade head 入口 |
 | `app/db/migrations/env.py` | Alembic async env |
 | `app/db/migrations/versions/0001_create_projects.py` | 建 projects 表 |
 | `docker/docker-compose.yml` | postgres + redis |
-| `tests/conftest.py` | async fixtures |
+| `tests/conftest.py` | async fixtures + DB/缓存隔离 |
 
-依赖顺序：Task 1（依赖/脚手架）→ 2（config）→ 3（constants）→ 4（response）→ 5（logging）→ 6（db）→ 7（redis）→ 8（security）→ 9（project_context）→ 10（models）→ 11（docker）→ 12（alembic）→ 13（health/whoami）→ 14（main 装配）→ 15（lint/最终验证）。
+依赖顺序：Task 1（脚手架）→ 2（config）→ 3（constants）→ 4（response）→ 5（logging）→ 6（db）→ 7（redis）→ 8（security）→ 9（project_context）→ 10（models）→ 10b（repositories 基类）→ 11（docker）→ 12（alembic）→ 13（health/whoami）→ 14（main 装配 + conftest）→ 15（lint/最终验证）。
 
 ---
 
@@ -45,8 +47,10 @@
 - [ ] **Step 1: 添加运行时依赖**
 
 ```bash
-uv add "python-json-logger>=2.0"
+uv add "python-json-logger>=2.0,<3"
 ```
+
+（pin `<3`：3.x 把 `jsonlogger.JsonFormatter` 迁到了 `pythonjsonlogger.json`，pin 住避免导入路径破坏。）
 
 （其余依赖 fastapi/sqlalchemy/asyncpg/alembic/redis/pyjwt/pydantic-settings/uvicorn 已在 pyproject.toml；dev 组 pytest/pytest-asyncio/httpx/ruff/mypy 已在。）
 
@@ -84,6 +88,7 @@ REDIS_DB=1
 JWT_SECRET=change-me-shared-with-java
 LOG_FORMAT=dev
 ENVIRONMENT=dev
+# 逗号分隔；Settings 的 field_validator 会拆成 list
 CORS_ORIGINS=*
 ```
 
@@ -150,6 +155,7 @@ Expected: FAIL（`ModuleNotFoundError: app.core.config`）
 from functools import lru_cache
 from typing import Literal
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -172,6 +178,9 @@ class Settings(BaseSettings):
     # 服务间调用（M0 留位）
     java_service_internal_token: str | None = None
 
+    # 数据源凭证加密密钥（M0 留位，M1 接入 cryptography 解密时启用）
+    datasource_secret_key: str | None = None
+
     # LLM 接入（M0 留位，全局非 per-project）
     llm_provider: str | None = None
     llm_api_key: str | None = None
@@ -182,6 +191,15 @@ class Settings(BaseSettings):
     cors_origins: list[str] = ["*"]
     log_format: Literal["dev", "json"] = "json"
     environment: Literal["dev", "prod"] = "dev"
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def _split_cors(cls, v: object) -> object:
+        """允许 env 用逗号分隔字符串（如 CORS_ORIGINS=*,http://x）；
+        否则 pydantic-settings 要求 JSON，`*` 会直接报错。"""
+        if isinstance(v, str):
+            return [item.strip() for item in v.split(",") if item.strip()]
+        return v
 
 
 @lru_cache
@@ -215,7 +233,7 @@ git commit -m "feat(core): add Settings via pydantic-settings"
 `tests/test_constants.py`:
 
 ```python
-from app.core.constants import ErrorCode, SERVICE_NAME, redis_key
+from app.core.constants import ErrorCode, RedisKey, SERVICE_NAME
 
 
 def test_error_codes():
@@ -229,8 +247,11 @@ def test_service_name():
     assert SERVICE_NAME == "mo-chat-aiops"
 
 
-def test_redis_key_template():
-    assert redis_key("p1", "agent:status") == "aiops:p1:agent:status"
+def test_redis_key_suffix_single_source():
+    # 后缀是单点常量，不在调用点写字面量
+    assert RedisKey.AGENT_STATUS == "agent:status"
+    assert RedisKey.of("p1", RedisKey.AGENT_STATUS) == "aiops:p1:agent:status"
+    assert RedisKey.of("p1", RedisKey.INGEST) == "aiops:p1:ingest"
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -243,7 +264,13 @@ Expected: FAIL（`ModuleNotFoundError`）
 `app/core/constants.py`:
 
 ```python
-"""全局常量单点声明：错误码、服务名、Redis key 模板。"""
+"""全局常量单点声明：错误码、服务名、Redis key（后缀 + 命名空间拼接）。
+
+错误码分段约定（后续里程碑按域扩展，避免拍脑袋编号）：
+  40xx = 鉴权 / 项目上下文     41xx = 告警域
+  42xx = 自愈域 / 请求校验      43xx = Agent 域
+  5xxx = 系统内部错误
+"""
 from enum import IntEnum
 
 SERVICE_NAME = "mo-chat-aiops"
@@ -253,16 +280,35 @@ class ErrorCode(IntEnum):
     """统一业务错误码（body 内 code 字段）。"""
 
     SUCCESS = 0
+    # 40xx 鉴权 / 上下文
     INVALID_PROJECT = 4001
     UNAUTHORIZED = 4010
     FORBIDDEN = 4030
+    # 42xx 请求校验
     VALIDATION_ERROR = 4220
+    # 5xxx 系统
     INTERNAL = 5000
 
 
-def redis_key(project_id: str, suffix: str) -> str:
-    """拼接项目命名空间 Redis key，禁止散落硬编码。"""
-    return f"aiops:{project_id}:{suffix}"
+class RedisKey:
+    """Redis key 后缀单点声明 + 项目命名空间拼接，禁止散落字面量。
+
+    后续里程碑用到的 key 后缀在此登记，调用点引用常量，不写字符串。
+    """
+
+    AGENT_STATUS = "agent:status"     # M3
+    INGEST = "ingest"                 # M4 入站处理队列
+    ALERTS = "alerts"                 # M4 出站前端推送通道
+    TOPOLOGY_CACHE = "topology:cache" # M5
+    CONFIG = "config"                 # 运行时热更新配置 Hash
+    WS_AGENT = "ws:agent"             # M5 PubSub
+    WS_HEAL = "ws:heal"               # M5 PubSub
+    RECENT_ERRORS = "recent_errors"   # M2 日志采集
+
+    @staticmethod
+    def of(project_id: str, suffix: str) -> str:
+        """拼接项目命名空间 key：aiops:{project_id}:{suffix}。"""
+        return f"aiops:{project_id}:{suffix}"
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -274,7 +320,7 @@ Expected: PASS
 
 ```bash
 git add -f app/core/constants.py tests/test_constants.py
-git commit -m "feat(core): add constants (ErrorCode, redis_key)"
+git commit -m "feat(core): add constants (ErrorCode segments, RedisKey single-source)"
 ```
 
 ---
@@ -291,11 +337,22 @@ git commit -m "feat(core): add constants (ErrorCode, redis_key)"
 
 ```python
 from app.core.constants import ErrorCode
-from app.schemas.response import APIError, Page, success
+from app.schemas.response import APIError, ApiResponse, ErrorResponse, Page, success
 
 
 def test_success_wrapper():
     assert success({"a": 1}) == {"code": 0, "data": {"a": 1}}
+
+
+def test_api_response_model():
+    resp = ApiResponse[dict](data={"a": 1})
+    assert resp.code == 0
+    assert resp.model_dump() == {"code": 0, "data": {"a": 1}}
+
+
+def test_error_response_model():
+    err = ErrorResponse(code=4001, message="bad", detail=None)
+    assert err.model_dump() == {"code": 4001, "message": "bad", "detail": None}
 
 
 def test_api_error_fields():
@@ -321,12 +378,33 @@ Expected: FAIL（`ModuleNotFoundError`）
 `app/schemas/response.py`:
 
 ```python
-"""统一响应包装与业务异常。"""
+"""统一响应包装与业务异常。
+
+- ApiResponse[T] / ErrorResponse：类型化信封，供路由声明 response_model，
+  让 FastAPI 自动生成 OpenAPI schema（契约即文档，AGENTS.md §9）。
+- success()：便捷构造成功 body。
+- APIError：业务异常，HTTP 200 + body 内携带业务 code。
+"""
 from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel
 
 T = TypeVar("T")
+
+
+class ApiResponse(BaseModel, Generic[T]):
+    """成功响应信封：{code:0, data}。路由用 response_model=ApiResponse[XxxData]。"""
+
+    code: int = 0
+    data: T
+
+
+class ErrorResponse(BaseModel):
+    """失败响应信封：{code, message, detail}。"""
+
+    code: int
+    message: str
+    detail: Any = None
 
 
 class APIError(Exception):
@@ -343,7 +421,7 @@ class APIError(Exception):
 
 
 def success(data: Any) -> dict:
-    """成功响应包装。"""
+    """成功响应包装（便捷构造；需 OpenAPI schema 时用 ApiResponse[T]）。"""
     return {"code": 0, "data": data}
 
 
@@ -391,7 +469,8 @@ def test_setup_logging_json(capsys):
     setup_logging(log_format="json")
     set_trace_id("trace-123")
     logging.getLogger("test").info("hello")
-    out = capsys.readouterr().err + capsys.readouterr().out
+    captured = capsys.readouterr()
+    out = captured.out + captured.err
     # 至少一条 JSON 行包含 service 与 trace_id
     lines = [l for l in out.splitlines() if l.strip().startswith("{")]
     assert lines, "no json log emitted"
@@ -939,6 +1018,7 @@ class Base(DeclarativeBase):
 """projects 表：多项目核心，唯一不带 project_id 的业务表。"""
 import uuid
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import Boolean, DateTime, String, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -961,7 +1041,7 @@ class Project(Base):
     metric_profile: Mapped[str] = mapped_column(
         String(32), nullable=False, default="java"
     )
-    datasource_config: Mapped[dict] = mapped_column(
+    datasource_config: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, default=dict
     )
     created_at: Mapped[datetime] = mapped_column(
@@ -985,6 +1065,109 @@ Expected: PASS
 ```bash
 git add -f app/models/base.py app/models/project.py tests/test_models.py
 git commit -m "feat(models): add Base and Project ORM"
+```
+
+---
+
+### Task 10b: repositories — 项目隔离基类（防漏写 project_id）
+
+**Files:**
+- Create: `app/repositories/__init__.py`
+- Create: `app/repositories/base.py`
+- Test: `tests/test_repositories.py`
+
+> 兑现 spec §2「M0 铺好 project_id 隔离基础设施」的承诺。M0 不接真实业务仓库，只立基类：构造期绑定 `session + project_id`，查询经 `scope()` 强制注入过滤，让「漏写 project_id」在构造期就不可能。M1+ 所有业务仓库继承它。`projects` 表本身无 project_id，是唯一例外，不继承此基类。
+
+- [ ] **Step 1: Write the failing test**
+
+`tests/test_repositories.py`:
+
+```python
+import uuid
+
+from sqlalchemy import Column, String, select
+from sqlalchemy.dialects.postgresql import UUID
+
+from app.models.base import Base
+from app.repositories.base import ProjectScopedRepository
+
+
+class _Dummy(Base):
+    """仅测试用的带 project_id 的表。"""
+
+    __tablename__ = "dummy_scoped"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(String(64), nullable=False)
+    name = Column(String(64))
+
+
+class _DummyRepo(ProjectScopedRepository):
+    project_column = _Dummy.project_id
+
+
+def test_scope_injects_project_filter():
+    repo = _DummyRepo(session=None, project_id="p-123")  # session 不参与本断言
+    stmt = repo.scope(select(_Dummy))
+    compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+    # 注入了 WHERE ... project_id = 'p-123'
+    assert "project_id" in compiled
+    assert "p-123" in compiled
+
+
+def test_repo_binds_project_id():
+    repo = _DummyRepo(session=None, project_id="p-xyz")
+    assert repo.project_id == "p-xyz"
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `uv run pytest tests/test_repositories.py -v`
+Expected: FAIL（`ModuleNotFoundError: app.repositories.base`）
+
+- [ ] **Step 3: Write implementation**
+
+`app/repositories/__init__.py`: 空文件。
+
+`app/repositories/base.py`:
+
+```python
+"""业务仓库基类：构造即绑定 project_id，查询强制注入过滤，杜绝漏写。
+
+M1+ 所有带 project_id 的业务表仓库继承本类，通过 self.scope(stmt) 查询。
+projects 表本身无 project_id，是唯一例外，不继承此基类。
+"""
+from typing import Any
+
+from sqlalchemy import Select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
+
+
+class ProjectScopedRepository:
+    """业务表仓库基类。session + project_id 在构造期绑定。"""
+
+    #: 子类指定本表的 project_id 列（如 AlertEvent.project_id）
+    project_column: ColumnElement[Any]
+
+    def __init__(self, session: AsyncSession | None, project_id: str) -> None:
+        self.session = session
+        self.project_id = project_id
+
+    def scope(self, stmt: Select) -> Select:
+        """给任意 SELECT 注入 WHERE project_id = self.project_id。"""
+        return stmt.where(self.project_column == self.project_id)
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `uv run pytest tests/test_repositories.py -v`
+Expected: PASS
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add -f app/repositories tests/test_repositories.py
+git commit -m "feat(repositories): add ProjectScopedRepository base for project_id isolation"
 ```
 
 ---
@@ -1263,7 +1446,13 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def run_upgrade_head() -> None:
-    """绝对路径修正 script_location 后 upgrade 到最新。"""
+    """绝对路径修正 script_location 后 upgrade 到最新。
+
+    注意：env.py 在线模式用 asyncio.run() 建临时 loop 跑迁移。
+    因此本函数必须在「没有运行中的事件循环」的线程里调用——
+    在 FastAPI lifespan / async 测试中要用 `await asyncio.to_thread(run_upgrade_head)`，
+    否则会触发 RuntimeError: asyncio.run() cannot be called from a running event loop。
+    """
     cfg = Config(str(_PROJECT_ROOT / "alembic.ini"))
     cfg.set_main_option(
         "script_location", str(_PROJECT_ROOT / "app" / "db" / "migrations")
@@ -1276,24 +1465,26 @@ def run_upgrade_head() -> None:
 `tests/test_migrations.py`:
 
 ```python
+import asyncio
 import os
 
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.db.migrate import run_upgrade_head
 
 
-def test_upgrade_creates_projects_table():
-    run_upgrade_head()
-    # 用同步引擎做表存在性断言（仅测试用）
-    sync_url = os.environ["DATABASE_URL"].replace("+asyncpg", "")
-    eng = create_engine(sync_url)
-    insp = inspect(eng)
-    assert "projects" in insp.get_table_names()
-    eng.dispose()
+async def test_upgrade_creates_projects_table():
+    # run_upgrade_head 内部走 asyncio.run，必须丢到无 loop 的线程执行
+    await asyncio.to_thread(run_upgrade_head)
+    engine = create_async_engine(os.environ["DATABASE_URL"])
+    async with engine.connect() as conn:
+        result = await conn.execute(text("SELECT to_regclass('public.projects')"))
+        assert result.scalar() is not None
+    await engine.dispose()
 ```
 
-> 注：测试用同步引擎仅做断言；需本地装 psycopg 或用 `postgresql://`。若环境无同步驱动，改用 asyncpg + `engine.connect()` 查 `information_schema.tables`。
+> 用 asyncpg（项目已装）做异步断言，不引入同步驱动（项目无 psycopg）。`to_thread` 保证 `run_upgrade_head` 不在运行中的事件循环里调 `asyncio.run`。
 
 - [ ] **Step 7: Run migration manually + test**
 
@@ -1432,6 +1623,8 @@ async def test_whoami_non_admin(client, make_jwt):
     assert resp.json()["code"] == 4030
 ```
 
+> `RequestValidationError → {code:4220}` 处理器的*形态*已由 `test_response.py::test_error_response_model` + main.py 注册覆盖。M0 无带强校验 query/body 的业务端点，无法构造真实 422；待 M1 出现此类接口时，在该接口测试里补一条真实触发 422 的用例（不在此写空断言制造假绿）。
+
 - [ ] **Step 3: Commit（实现部分；测试随 Task 14 跑通后再确认）**
 
 ```bash
@@ -1454,6 +1647,7 @@ git commit -m "feat(api): add health, metrics placeholder, whoami probe"
 
 ```python
 """FastAPI app 工厂：lifespan 建 engine/redis + 自动迁移 + 异常处理。"""
+import asyncio
 import uuid
 from contextlib import asynccontextmanager
 
@@ -1482,7 +1676,9 @@ async def lifespan(app: FastAPI):
     app.state.sessionmaker = make_sessionmaker(app.state.engine)
     app.state.redis = create_redis(settings.redis_url, db=settings.redis_db)
 
-    run_upgrade_head()
+    # 迁移走线程：env.py 在线模式用 asyncio.run() 建临时 loop，
+    # 在已运行的 lifespan 事件循环里直接调会抛 RuntimeError。
+    await asyncio.to_thread(run_upgrade_head)
 
     import logging
 
@@ -1555,19 +1751,33 @@ app = get_app()
 `tests/conftest.py`:
 
 ```python
-"""async 测试 fixtures：app、AsyncClient、签 JWT 工具。"""
+"""async 测试 fixtures：app、AsyncClient、签 JWT、DB/缓存隔离。"""
 import time
 
 import jwt
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import text
 
 from app.core.config import get_settings
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
+def _clear_settings_cache():
+    """每个测试前后清 lru_cache，防 monkeypatch env 跨测试污染。"""
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
+@pytest.fixture(scope="session")
 async def app_instance():
-    """构造并走完 lifespan 的 app（建 engine/redis + 迁移）。"""
+    """会话级 app：lifespan 只跑一次（建 engine/redis + 迁移），避免每测重建。
+
+    仅被需要 DB/Redis 的集成测试（经 client fixture）触发，
+    纯单元测试（config/constants/response/security/project_context/logging/repositories）
+    不依赖它，故不需要 DB 在场。
+    """
     from app.main import get_app
 
     application = get_app()
@@ -1576,8 +1786,25 @@ async def app_instance():
 
 
 @pytest.fixture
-async def client(app_instance):
-    """绑定到 app 的 httpx AsyncClient。"""
+async def _clean_db_and_redis(app_instance):
+    """测试后清业务表与测试 Redis key，保证集成测试间状态隔离。
+
+    非 autouse：由 client fixture 依赖触发，只作用于真正打 DB 的测试。
+    M0 仅 projects 一张业务表；M1+ 新增业务表时在此追加 TRUNCATE。
+    """
+    yield
+    engine = app_instance.state.engine
+    async with engine.begin() as conn:
+        await conn.execute(text("TRUNCATE TABLE projects RESTART IDENTITY CASCADE"))
+    redis = app_instance.state.redis
+    keys = await redis.keys("aiops:*")
+    if keys:
+        await redis.delete(*keys)
+
+
+@pytest.fixture
+async def client(app_instance, _clean_db_and_redis):
+    """绑定到 app 的 httpx AsyncClient（用后自动清 DB/Redis）。"""
     transport = ASGITransport(app=app_instance)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
@@ -1594,6 +1821,8 @@ def make_jwt():
 
     return _make
 ```
+
+> session 级 `app_instance` 需 pytest-asyncio 的 event loop 覆盖到 session 作用域。`asyncio_mode = "auto"`（Task 1）下，session 级 async fixture 会自动获得 session 级 loop；若运行时报 loop scope 不匹配，在 `pyproject.toml` 的 `[tool.pytest.ini_options]` 加 `asyncio_default_fixture_loop_scope = "session"`。
 
 - [ ] **Step 3: Run full test suite**
 
@@ -1662,6 +1891,18 @@ git commit -m "chore: pass ruff + mypy, finalize M0 foundation"
 
 ## Self-Review 备注
 
-- **Spec 覆盖**：§4 各模块均有对应 Task（config→T2、constants→T3、logging→T5、db→T6、redis→T7、security→T8、project_context→T9、response→T4、models→T10、health→T13、main→T14、alembic→T12、docker→T11）。§7 测试策略每项落到对应 test 文件。
-- **类型一致性**：`success()`/`APIError`/`Page`（T4）→ 被 T8/T9/T13 引用；`CurrentUser`（T8）→ T13 引用；`ping_db`/`ping_redis`（T6/T7）→ T13/T14 引用；`get_project_id`/`get_current_user`（T8/T9）→ T13 引用；`run_upgrade_head`（T12）→ T14 引用。命名前后一致。
+- **Spec 覆盖**：§4 各模块均有对应 Task（config→T2、constants→T3、logging→T5、db→T6、redis→T7、security→T8、project_context→T9、response→T4、models→T10、repositories 基类→T10b、health→T13、main→T14、alembic→T12、docker→T11）。§7 测试策略每项落到对应 test 文件。
+- **类型一致性**：`success()`/`ApiResponse`/`ErrorResponse`/`APIError`/`Page`（T4）→ 被 T8/T9/T13 引用；`CurrentUser`（T8）→ T13 引用；`ping_db`/`ping_redis`（T6/T7）→ T13/T14 引用；`get_project_id`/`get_current_user`（T8/T9）→ T13 引用；`run_upgrade_head`（T12）→ T14 引用；`RedisKey`（T3）单点声明，M2+ 引用；`ProjectScopedRepository`（T10b）→ M1+ 业务仓库继承。命名前后一致。
 - **依赖顺序**：T13 的测试依赖 T14 的 conftest，已在 T13 标注「随 T14 跑通」。
+- **审查修复（子代理评审后）**：
+  - B1/B2 lifespan 内 `asyncio.run()` 套娃 → 改 `await asyncio.to_thread(run_upgrade_head)`（T14 + migrate.py docstring + T12 测试）。
+  - B3 测试无 DB 隔离 → 会话级 `app_instance` + `_clean_db_and_redis` TRUNCATE/清 Redis（T14 conftest）。
+  - B4 `get_settings` lru_cache 污染 → autouse `_clear_settings_cache`（T14 conftest）。
+  - B5 `CORS_ORIGINS=*` 崩 → Settings 加 `field_validator` 支持逗号分隔（T2）。
+  - B6 迁移测试用未装的同步驱动 → 改 asyncpg async 断言（T12）。
+  - B7 capsys 双调用 → 单次取全（T5）；python-json-logger pin `<3`（T1）。
+  - A1 repositories 基类缺位 → 新增 T10b `ProjectScopedRepository`。
+  - A3 加密密钥 Settings 留位 + `datasource_config: dict[str, Any]`（T2/T10）。
+  - A4 响应裸 dict → 增 `ApiResponse[T]`/`ErrorResponse` 类型化信封供 OpenAPI（T4）。
+  - A5 ErrorCode 分段规约 + A6 RedisKey 后缀单点声明（T3）。
+  - C3 RequestValidationError 覆盖说明（T13，不写空断言）。
