@@ -18,7 +18,9 @@ class CurrentUser(BaseModel):
 def decode_and_verify(token: str, secret: str, algorithm: str) -> CurrentUser:
     """解码 JWT，校验签名/过期/角色。失败抛 APIError。"""
     try:
-        payload = jwt.decode(token, secret, algorithms=[algorithm])
+        payload = jwt.decode(
+            token, secret, algorithms=[algorithm], options={"require": ["exp"]}
+        )
     except jwt.ExpiredSignatureError:
         raise APIError(ErrorCode.UNAUTHORIZED, "token expired")
     except jwt.InvalidTokenError:

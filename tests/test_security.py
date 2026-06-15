@@ -27,6 +27,14 @@ def test_expired_token():
     assert e.value.code == 4010
 
 
+def test_token_without_exp_rejected():
+    # 不带 exp 的 token 永不过期，必须拒绝（require exp）
+    token = jwt.encode({"sub": "u1", "role": "admin"}, SECRET, algorithm="HS256")
+    with pytest.raises(APIError) as e:
+        decode_and_verify(token, SECRET, "HS256")
+    assert e.value.code == 4010
+
+
 def test_non_admin_forbidden():
     with pytest.raises(APIError) as e:
         decode_and_verify(_token(role="user"), SECRET, "HS256")
