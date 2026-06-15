@@ -1156,7 +1156,10 @@ class ProjectScopedRepository:
 
     def scope(self, stmt: Select) -> Select:
         """给任意 SELECT 注入 WHERE project_id = self.project_id。"""
-        return stmt.where(self.project_column == self.project_id)
+        # 经类访问绕过 InstrumentedAttribute 描述符（实例访问会触发 __get__
+        # 而 repo 实例非 mapped 对象，会抛 AttributeError）。
+        col = type(self).project_column
+        return stmt.where(col == self.project_id)
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
