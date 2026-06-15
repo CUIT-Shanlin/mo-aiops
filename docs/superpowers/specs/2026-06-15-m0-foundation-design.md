@@ -200,7 +200,7 @@ pydantic-settings `Settings`（`@lru_cache` 单例），`.env` 加载，回退�
   6. `yield`
   7. `await engine.dispose()` + `await redis.aclose()`
 - 中间件（注意 LIFO，后加先执行）：RequestId（注入 `trace_id_var`）→ CORS（`settings.cors_origins`）→ 日志。CORS 凭证：origins 含 `*` 时 `allow_credentials=False`（通配 origin 与 credentials 互斥，Starlette 在 `*` 下反射请求 origin，叠加 credentials 等于放任何站点带凭证跨域）；prod 须设显式 origins 才启用 credentials。
-- 异常处理：`app.add_exception_handler(APIError, ...)` → `{code, message, detail}`（HTTP 200，业务码在 body）；`RequestValidationError` → `{code:4220, message, detail}`。
+- 异常处理：`app.add_exception_handler(APIError, ...)` → `{code, message, detail}`（HTTP 200，业务码在 body）；`RequestValidationError` → `{code:4220, message, detail}`；兜底 `Exception` → `{code:5000, message:"internal error", detail:null}`（HTTP 500，细节只进日志不进 body，防止 FastAPI 默认 `{detail}` 漏出、破坏统一契约）。
 - 挂载 `api/health.py` 路由。
 
 ---
