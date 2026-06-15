@@ -34,6 +34,7 @@ def setup_logging(log_format: str = "json") -> None:
     """配置根 logger；dev 人类可读，json 结构化。"""
     handler = logging.StreamHandler()
     handler.addFilter(ContextFilter())
+    fmt: logging.Formatter
     if log_format == "json":
         fmt = jsonlogger.JsonFormatter(
             "%(asctime)s %(levelname)s %(name)s %(message)s "

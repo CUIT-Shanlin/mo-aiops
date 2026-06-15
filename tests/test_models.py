@@ -1,5 +1,5 @@
 from app.models.base import Base
-from app.models.project import Project
+from app.models.project import Project  # noqa: F401  # 导入触发表注册进 metadata
 
 
 def test_project_table_registered():
