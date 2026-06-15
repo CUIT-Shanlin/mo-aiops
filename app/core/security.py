@@ -27,7 +27,7 @@ def decode_and_verify(token: str, secret: str, algorithm: str) -> CurrentUser:
         raise APIError(ErrorCode.UNAUTHORIZED, "invalid token")
     if payload.get("role") != "admin":
         raise APIError(ErrorCode.FORBIDDEN, "admin role required")
-    return CurrentUser(user_id=payload.get("sub"), role="admin")
+    return CurrentUser(user_id=payload.get("sub"), role=payload["role"])
 
 
 async def get_current_user(

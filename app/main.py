@@ -1,5 +1,6 @@
 """FastAPI app 工厂：lifespan 建 engine/redis + 自动迁移 + 异常处理。"""
 import asyncio
+import logging
 import uuid
 from contextlib import asynccontextmanager
 
@@ -31,8 +32,6 @@ async def lifespan(app: FastAPI):
     # 迁移走线程：env.py 在线模式用 asyncio.run() 建临时 loop，
     # 在已运行的 lifespan 事件循环里直接调会抛 RuntimeError。
     await asyncio.to_thread(run_upgrade_head)
-
-    import logging
 
     log = logging.getLogger("startup")
     if not await ping_db(app.state.engine):
@@ -92,6 +91,18 @@ def get_app() -> FastAPI:
                 "message": "validation error",
                 "detail": exc.errors(),
             },
+        )
+
+    @app.exception_handler(Exception)
+    async def unhandled_handler(request: Request, exc: Exception) -> JSONResponse:
+        """兜底未捕获异常 → 统一 body（5xxx），避免漏出 FastAPI 默认 {detail}。
+
+        细节不进 body（防泄漏内部信息），完整堆栈由日志承载。
+        """
+        logging.getLogger("unhandled").exception("unhandled exception")
+        return JSONResponse(
+            status_code=500,
+            content={"code": ErrorCode.INTERNAL, "message": "internal error", "detail": None},
         )
 
     app.include_router(health_router)
