@@ -1,0 +1,55 @@
+"""启动期静态配置（pydantic-settings 单一来源）。"""
+from functools import lru_cache
+from typing import Literal
+
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """从 .env / 环境变量加载的启动配置。敏感字段禁止进日志。"""
+
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+    )
+
+    # 数据库与缓存
+    database_url: str
+    redis_url: str
+    redis_db: int = 1
+
+    # 鉴权（与 Java 主服务共享对称 Secret）
+    jwt_secret: str
+    jwt_algorithm: str = "HS256"
+
+    # 服务间调用（M0 留位）
+    java_service_internal_token: str | None = None
+
+    # 数据源凭证加密密钥（M0 留位，M1 接入 cryptography 解密时启用）
+    datasource_secret_key: str | None = None
+
+    # LLM 接入（M0 留位，全局非 per-project）
+    llm_provider: str | None = None
+    llm_api_key: str | None = None
+    llm_base_url: str | None = None
+    llm_model: str | None = None
+
+    # 横切
+    cors_origins: list[str] = ["*"]
+    log_format: Literal["dev", "json"] = "json"
+    environment: Literal["dev", "prod"] = "dev"
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def _split_cors(cls, v: object) -> object:
+        """允许 env 用逗号分隔字符串（如 CORS_ORIGINS=*,http://x）；
+        否则 pydantic-settings 要求 JSON，`*` 会直接报错。"""
+        if isinstance(v, str):
+            return [item.strip() for item in v.split(",") if item.strip()]
+        return v
+
+
+@lru_cache
+def get_settings() -> Settings:
+    """进程内单例配置。"""
+    return Settings()
