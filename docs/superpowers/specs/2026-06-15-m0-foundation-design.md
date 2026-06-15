@@ -106,7 +106,7 @@ pydantic-settings `Settings`（`@lru_cache` 单例），`.env` 加载，回退�
 - `java_service_internal_token: str | None = None`
 - `datasource_secret_key: str | None = None`（M0 留位，M1 接入 cryptography 解密数据源凭证时启用）
 - `llm_provider/llm_api_key/llm_base_url/llm_model`（M0 可选，留位）
-- `cors_origins: list[str] = ["*"]`（dev）；`field_validator` 支持 env 用逗号分隔字符串（如 `CORS_ORIGINS=*`），否则 pydantic-settings 要求 JSON、裸 `*` 会启动即崩
+- `cors_origins: Annotated[list[str], NoDecode] = ["*"]`（dev）；`NoDecode` 关掉 pydantic-settings 对复杂类型的 JSON 预解码 + `field_validator` 拆逗号分隔字符串（如 `CORS_ORIGINS=*`）。**不能只用 validator**：复杂类型在 source 层先被 JSON 解码，裸 `*` 会在 validator 跑之前就抛错。
 - `log_format: Literal["dev","json"] = "json"`
 - `environment: Literal["dev","prod"] = "dev"`
 
