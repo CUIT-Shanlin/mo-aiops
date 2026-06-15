@@ -153,10 +153,10 @@ Expected: FAIL（`ModuleNotFoundError: app.core.config`）
 ```python
 """启动期静态配置（pydantic-settings 单一来源）。"""
 from functools import lru_cache
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -188,15 +188,16 @@ class Settings(BaseSettings):
     llm_model: str | None = None
 
     # 横切
-    cors_origins: list[str] = ["*"]
+    cors_origins: Annotated[list[str], NoDecode] = ["*"]
     log_format: Literal["dev", "json"] = "json"
     environment: Literal["dev", "prod"] = "dev"
 
     @field_validator("cors_origins", mode="before")
     @classmethod
     def _split_cors(cls, v: object) -> object:
-        """允许 env 用逗号分隔字符串（如 CORS_ORIGINS=*,http://x）；
-        否则 pydantic-settings 要求 JSON，`*` 会直接报错。"""
+        """允许 env 用逗号分隔字符串（如 CORS_ORIGINS=*,http://x）。
+        NoDecode 关掉 pydantic-settings 对复杂类型的 JSON 预解码，
+        否则 `*` 会在 source 层就报错（validator 根本来不及跑）。"""
         if isinstance(v, str):
             return [item.strip() for item in v.split(",") if item.strip()]
         return v
@@ -840,7 +841,9 @@ class CurrentUser(BaseModel):
 def decode_and_verify(token: str, secret: str, algorithm: str) -> CurrentUser:
     """解码 JWT，校验签名/过期/角色。失败抛 APIError。"""
     try:
-        payload = jwt.decode(token, secret, algorithms=[algorithm])
+        payload = jwt.decode(
+            token, secret, algorithms=[algorithm], options={"require": ["exp"]}
+        )
     except jwt.ExpiredSignatureError:
         raise APIError(ErrorCode.UNAUTHORIZED, "token expired")
     except jwt.InvalidTokenError:
@@ -1155,7 +1158,10 @@ class ProjectScopedRepository:
 
     def scope(self, stmt: Select) -> Select:
         """给任意 SELECT 注入 WHERE project_id = self.project_id。"""
-        return stmt.where(self.project_column == self.project_id)
+        # 经类访问绕过 InstrumentedAttribute 描述符（实例访问会触发 __get__
+        # 而 repo 实例非 mapped 对象，会抛 AttributeError）。
+        col = type(self).project_column
+        return stmt.where(col == self.project_id)
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -1700,10 +1706,13 @@ def get_app() -> FastAPI:
     app = FastAPI(title="mo-chat-aiops", lifespan=lifespan)
 
     # 中间件（LIFO：后加先执行）。CORS 先加，trace 后加 → trace 最先跑注入 id。
+    # 通配 origin 与 credentials 互斥（CORS 规范）：Starlette 在 "*" 下会反射请求 origin，
+    # 叠加 allow_credentials=True 等于放任何站点带凭证跨域。故 origins 为 "*" 时关掉 credentials。
+    allow_wildcard = "*" in settings.cors_origins
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
-        allow_credentials=True,
+        allow_credentials=not allow_wildcard,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -1770,13 +1779,14 @@ def _clear_settings_cache():
     get_settings.cache_clear()
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 async def app_instance():
-    """会话级 app：lifespan 只跑一次（建 engine/redis + 迁移），避免每测重建。
+    """函数级 app：每测跑一次 lifespan（建 engine/redis + 幂等迁移）。
 
-    仅被需要 DB/Redis 的集成测试（经 client fixture）触发，
-    纯单元测试（config/constants/response/security/project_context/logging/repositories）
-    不依赖它，故不需要 DB 在场。
+    刻意不用 session 作用域：session 级 async fixture 与 function 级
+    client/_clean 跨事件循环会触发 "Event loop is closed" / "Future attached
+    to a different loop"。迁移幂等，每测重建换来 engine/redis 与测试同循环，
+    正确性优先于速度。
     """
     from app.main import get_app
 
@@ -1822,7 +1832,11 @@ def make_jwt():
     return _make
 ```
 
-> session 级 `app_instance` 需 pytest-asyncio 的 event loop 覆盖到 session 作用域。`asyncio_mode = "auto"`（Task 1）下，session 级 async fixture 会自动获得 session 级 loop；若运行时报 loop scope 不匹配，在 `pyproject.toml` 的 `[tool.pytest.ini_options]` 加 `asyncio_default_fixture_loop_scope = "session"`。
+> **作用域决策（实现期定稿）**：`app_instance` 用 **函数级**，不用 session 级。
+> session 级 async fixture 与 function 级 `client`/`_clean_db_and_redis` 跨事件循环会触发
+> "Event loop is closed"（session engine/redis 绑在别的 loop，ping 失败 → health 返回 degraded，
+> 且打断已有的 test_redis function-loop fixtures）。迁移幂等，每测重建 lifespan 是安全的，
+> 用一点速度换 engine/redis 与测试同循环的正确性。`asyncio_default_fixture_loop_scope` 无需设置。
 
 - [ ] **Step 3: Run full test suite**
 

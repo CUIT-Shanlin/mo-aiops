@@ -1,0 +1,14 @@
+async def test_health_ok(client):
+    resp = await client.get("/health")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["code"] == 0
+    assert body["data"]["status"] == "healthy"
+    assert body["data"]["db"] == "ok"
+    assert body["data"]["redis"] == "ok"
+
+
+async def test_metrics_accessible(client):
+    resp = await client.get("/metrics")
+    assert resp.status_code == 200
+    assert "placeholder" in resp.text
