@@ -144,7 +144,7 @@ pydantic-settings `Settings`（`@lru_cache` 单例），`.env` 加载，回退�
 
 - `get_current_user`：FastAPI 依赖。
   - 从 `Authorization: Bearer <token>` 取 token；缺失 → `APIError(UNAUTHORIZED, 4010)`。
-  - `jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])`，校验 `exp`（PyJWT 默认校验）；`InvalidTokenError`/`ExpiredSignatureError` → 4010。
+  - `jwt.decode(token, settings.jwt_secret, algorithms=["HS256"], options={"require": ["exp"]})`，强制要求并校验 `exp`（不带 exp 的 token 永不过期，须拒绝）；`InvalidTokenError`/`ExpiredSignatureError` → 4010。
   - 校验 payload `role == "admin"`，否则 → `APIError(FORBIDDEN, 4030)`。
   - 返回 `CurrentUser(user_id=payload.get("sub"), role="admin")`（pydantic model）。
 - 缺 `JWT_SECRET` 在 Settings 加载期即失败，不到运行期。
@@ -199,7 +199,7 @@ pydantic-settings `Settings`（`@lru_cache` 单例），`.env` 加载，回退�
   5. `ping_db` / `ping_redis`（失败记 WARN，不阻断启动）
   6. `yield`
   7. `await engine.dispose()` + `await redis.aclose()`
-- 中间件（注意 LIFO，后加先执行）：RequestId（注入 `trace_id_var`）→ CORS（`settings.cors_origins`）→ 日志。
+- 中间件（注意 LIFO，后加先执行）：RequestId（注入 `trace_id_var`）→ CORS（`settings.cors_origins`）→ 日志。CORS 凭证：origins 含 `*` 时 `allow_credentials=False`（通配 origin 与 credentials 互斥，Starlette 在 `*` 下反射请求 origin，叠加 credentials 等于放任何站点带凭证跨域）；prod 须设显式 origins 才启用 credentials。
 - 异常处理：`app.add_exception_handler(APIError, ...)` → `{code, message, detail}`（HTTP 200，业务码在 body）；`RequestValidationError` → `{code:4220, message, detail}`。
 - 挂载 `api/health.py` 路由。
 

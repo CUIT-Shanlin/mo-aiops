@@ -841,7 +841,9 @@ class CurrentUser(BaseModel):
 def decode_and_verify(token: str, secret: str, algorithm: str) -> CurrentUser:
     """解码 JWT，校验签名/过期/角色。失败抛 APIError。"""
     try:
-        payload = jwt.decode(token, secret, algorithms=[algorithm])
+        payload = jwt.decode(
+            token, secret, algorithms=[algorithm], options={"require": ["exp"]}
+        )
     except jwt.ExpiredSignatureError:
         raise APIError(ErrorCode.UNAUTHORIZED, "token expired")
     except jwt.InvalidTokenError:
@@ -1704,10 +1706,13 @@ def get_app() -> FastAPI:
     app = FastAPI(title="mo-chat-aiops", lifespan=lifespan)
 
     # 中间件（LIFO：后加先执行）。CORS 先加，trace 后加 → trace 最先跑注入 id。
+    # 通配 origin 与 credentials 互斥（CORS 规范）：Starlette 在 "*" 下会反射请求 origin，
+    # 叠加 allow_credentials=True 等于放任何站点带凭证跨域。故 origins 为 "*" 时关掉 credentials。
+    allow_wildcard = "*" in settings.cors_origins
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
-        allow_credentials=True,
+        allow_credentials=not allow_wildcard,
         allow_methods=["*"],
         allow_headers=["*"],
     )
