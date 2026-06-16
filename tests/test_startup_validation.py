@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 import pytest
 
@@ -34,6 +35,12 @@ class _CloseFailureProvider(_DummyProvider):
     async def close(self) -> None:
         self.closed = True
         raise RuntimeError("close-secret")
+
+
+class _SlowProvider(_DummyProvider):
+    async def validate_scopes(self) -> dict[str, bool | str]:
+        await asyncio.sleep(0.05)
+        return {"connectivity": True}
 
 
 @pytest.mark.asyncio
@@ -140,6 +147,36 @@ async def test_validate_configured_providers_construction_failure_does_not_block
         "__error__": {"connectivity": False, "error": "ProviderConfigurationError"}
     }
     assert "secret-password" not in str(result)
+
+
+@pytest.mark.asyncio
+async def test_validate_configured_providers_runs_across_projects_in_parallel(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "app.providers.health.create_project_providers",
+        lambda project_id, _project: {
+            "prometheus": _SlowProvider(project_id, "prometheus")
+        },
+    )
+
+    config = ProjectsConfig(
+        default_project="p1",
+        projects={
+            "p1": ProjectConfig(name="P1"),
+            "p2": ProjectConfig(name="P2"),
+        },
+    )
+
+    start = time.perf_counter()
+    result = await validate_configured_providers(config, timeout_seconds=0.2)
+    elapsed = time.perf_counter() - start
+
+    assert result == {
+        "p1": {"prometheus": {"connectivity": True}},
+        "p2": {"prometheus": {"connectivity": True}},
+    }
+    assert elapsed < 0.09
 
 
 def test_settings_can_disable_startup_provider_validation(monkeypatch):

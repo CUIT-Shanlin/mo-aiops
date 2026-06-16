@@ -37,9 +37,11 @@ async def validate_configured_providers(
     timeout_seconds: float = 1.0,
 ) -> dict[str, dict[str, dict[str, bool | str]]]:
     results: dict[str, dict[str, dict[str, bool | str]]] = {}
+    tasks: list[asyncio.Task[dict[str, bool | str]]] = []
+    task_targets: list[tuple[str, str]] = []
 
     for project_id, project in iter_enabled_projects(config):
-        results[project_id] = {}
+        results.setdefault(project_id, {})
         try:
             providers = create_project_providers(project_id, project)
         except Exception as exc:
@@ -52,15 +54,16 @@ async def validate_configured_providers(
         if not providers:
             continue
 
-        provider_results = await asyncio.gather(
-            *[
-                _validate_provider(provider, timeout_seconds)
-                for provider in providers.values()
-            ]
-        )
-        for datasource_type, provider_result in zip(
-            providers.keys(), provider_results, strict=True
+        for datasource_type, provider in providers.items():
+            tasks.append(asyncio.create_task(_validate_provider(provider, timeout_seconds)))
+            task_targets.append((project_id, datasource_type))
+
+    if tasks:
+        provider_results = await asyncio.gather(*tasks)
+        for (project_id, datasource_type), provider_result in zip(
+            task_targets, provider_results, strict=True
         ):
+            results.setdefault(project_id, {})
             results[project_id][datasource_type] = provider_result
 
     return results

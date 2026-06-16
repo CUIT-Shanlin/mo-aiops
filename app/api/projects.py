@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request
 
+from app.core.projects import get_projects_config
 from app.core.security import CurrentUser, get_current_user
 from app.schemas.response import success
 
@@ -14,7 +15,7 @@ async def list_projects(
     request: Request,
     _current_user: CurrentUser = Depends(get_current_user),
 ) -> dict:
-    config = request.app.state.projects_config
+    config = getattr(request.app.state, "projects_config", None) or get_projects_config()
     items = [
         {
             "id": project_id,

@@ -1,6 +1,6 @@
 from httpx import ASGITransport, AsyncClient
 
-from app.core.projects import reset_projects_config
+from app.core.projects import ProjectConfig, ProjectsConfig, reset_projects_config
 
 
 async def test_projects_api_requires_jwt(client):
@@ -69,3 +69,41 @@ async def test_projects_api_forbids_non_admin(client, make_jwt):
 
     assert response.status_code == 200
     assert response.json()["code"] == 40003
+
+
+async def test_projects_api_falls_back_to_cached_config_without_lifespan(
+    make_jwt, monkeypatch
+):
+    from app.main import get_app
+
+    monkeypatch.setattr(
+        "app.core.projects._config",
+        ProjectsConfig(
+            default_project="demo",
+            projects={
+                "demo": ProjectConfig(name="Demo", metric_profile="java"),
+                "disabled": ProjectConfig(
+                    name="Disabled",
+                    metric_profile="java",
+                    enabled=False,
+                ),
+            },
+        ),
+    )
+    app = get_app()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+    ) as client:
+        response = await client.get(
+            "/api/v1/projects",
+            headers={"Authorization": f"Bearer {make_jwt(role='admin')}"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "code": 0,
+        "message": "success",
+        "data": [{"id": "demo", "name": "Demo", "metricProfile": "java"}],
+    }
