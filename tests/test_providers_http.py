@@ -83,6 +83,56 @@ async def test_prometheus_instant_query_uses_api_and_query_param():
 
 
 @pytest.mark.asyncio
+async def test_prometheus_basic_auth_is_used_when_credentials_exist():
+    session = FakeSession(FakeResponse(payload={"status": "success"}))
+    provider = PrometheusProvider(
+        project_id="proj-a",
+        datasource_type="prometheus",
+        config=PrometheusDatasourceConfig(
+            base_url="http://prom:9090",
+            username="alice",
+            password="secret",
+        ),
+        session=session,
+    )
+
+    await provider.query(query_type="instant", query="up")
+
+    assert session.calls[0][1]["auth"] is not None
+
+
+@pytest.mark.asyncio
+async def test_prometheus_validate_scopes_hits_healthy_endpoint():
+    session = FakeSession(FakeResponse(status=200, text_value="ok"))
+    provider = PrometheusProvider(
+        project_id="proj-a",
+        datasource_type="prometheus",
+        config=PrometheusDatasourceConfig(base_url="http://prom:9090"),
+        session=session,
+    )
+
+    result = await provider.validate_scopes()
+
+    assert result == {"connectivity": True}
+    assert session.calls == [("http://prom:9090/-/healthy", {"ssl": True})]
+
+
+@pytest.mark.asyncio
+async def test_prometheus_verify_ssl_false_is_passed_to_request():
+    session = FakeSession(FakeResponse(payload={"status": "success"}))
+    provider = PrometheusProvider(
+        project_id="proj-a",
+        datasource_type="prometheus",
+        config=PrometheusDatasourceConfig(base_url="http://prom:9090", verify_ssl=False),
+        session=session,
+    )
+
+    await provider.query(query_type="instant", query="up")
+
+    assert session.calls[0][1]["ssl"] is False
+
+
+@pytest.mark.asyncio
 async def test_prometheus_unknown_query_type_raises_provider_error():
     session = FakeSession(FakeResponse(payload={"status": "success"}))
     provider = PrometheusProvider(
@@ -163,6 +213,69 @@ async def test_loki_x_scope_orgid_sets_header():
 
 
 @pytest.mark.asyncio
+async def test_loki_no_auth_does_not_set_auth_or_orgid_header():
+    session = FakeSession(FakeResponse(payload={"data": []}))
+    provider = LokiProvider(
+        project_id="proj-a",
+        datasource_type="loki",
+        config=LokiDatasourceConfig(base_url="http://loki:3100"),
+        session=session,
+    )
+
+    await provider.query(query='{job="app"}')
+
+    assert "auth" not in session.calls[0][1]
+    assert "headers" not in session.calls[0][1]
+
+
+@pytest.mark.asyncio
+async def test_loki_validate_scopes_hits_buildinfo_endpoint():
+    session = FakeSession(FakeResponse(status=200, text_value="ok"))
+    provider = LokiProvider(
+        project_id="proj-a",
+        datasource_type="loki",
+        config=LokiDatasourceConfig(base_url="http://loki:3100"),
+        session=session,
+    )
+
+    result = await provider.validate_scopes()
+
+    assert result == {"connectivity": True}
+    assert session.calls == [
+        ("http://loki:3100/loki/api/v1/status/buildinfo", {"ssl": True})
+    ]
+
+
+@pytest.mark.asyncio
+async def test_loki_non_2xx_raises_provider_error():
+    session = FakeSession(FakeResponse(status=500, text_value="boom"))
+    provider = LokiProvider(
+        project_id="proj-a",
+        datasource_type="loki",
+        config=LokiDatasourceConfig(base_url="http://loki:3100"),
+        session=session,
+    )
+
+    with pytest.raises(ProviderError, match="HTTP 500"):
+        await provider.query(query='{job="app"}')
+
+
+@pytest.mark.asyncio
+async def test_loki_verify_ssl_false_is_passed_to_request():
+    session = FakeSession(FakeResponse(payload={"data": []}))
+    provider = LokiProvider(
+        project_id="proj-a",
+        datasource_type="loki",
+        config=LokiDatasourceConfig(base_url="http://loki:3100", verify_ssl=False),
+        session=session,
+    )
+
+    await provider.query(query='{job="app"}')
+
+    assert session.calls[0][1]["ssl"] is False
+
+
+@pytest.mark.asyncio
 async def test_loki_basic_auth_is_used_when_credentials_exist():
     session = FakeSession(FakeResponse(payload={"data": []}))
     provider = LokiProvider(
@@ -196,6 +309,25 @@ async def test_tempo_trace_query_uses_trace_endpoint():
     await provider.query(query_type="trace", trace_id="abc")
 
     assert session.calls == [("http://tempo:3200/api/traces/abc", {"ssl": True})]
+
+
+@pytest.mark.asyncio
+async def test_tempo_basic_auth_is_used_when_credentials_exist():
+    session = FakeSession(FakeResponse(payload={"traceID": "abc"}))
+    provider = TempoProvider(
+        project_id="proj-a",
+        datasource_type="tempo",
+        config=TempoDatasourceConfig(
+            base_url="http://tempo:3200",
+            username="alice",
+            password="secret",
+        ),
+        session=session,
+    )
+
+    await provider.query(query_type="trace", trace_id="abc")
+
+    assert session.calls[0][1]["auth"] is not None
 
 
 @pytest.mark.asyncio
@@ -242,6 +374,20 @@ async def test_tempo_search_query_filters_none_params():
             },
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_tempo_non_2xx_raises_provider_error():
+    session = FakeSession(FakeResponse(status=500, text_value="boom"))
+    provider = TempoProvider(
+        project_id="proj-a",
+        datasource_type="tempo",
+        config=TempoDatasourceConfig(base_url="http://tempo:3200"),
+        session=session,
+    )
+
+    with pytest.raises(ProviderError, match="HTTP 500"):
+        await provider.query(query_type="search", service_name="checkout")
 
 
 @pytest.mark.asyncio
@@ -295,6 +441,21 @@ async def test_tempo_validate_scopes_falls_back_to_search_on_ready_failure():
         ("http://tempo:3200/ready", {"ssl": True}),
         ("http://tempo:3200/api/search", {"ssl": True}),
     ]
+
+
+@pytest.mark.asyncio
+async def test_tempo_close_does_not_close_injected_session():
+    session = FakeSession(FakeResponse(payload={"data": []}))
+    provider = TempoProvider(
+        project_id="proj-a",
+        datasource_type="tempo",
+        config=TempoDatasourceConfig(base_url="http://tempo:3200"),
+        session=session,
+    )
+
+    await provider.close()
+
+    assert session.closed is False
 
 
 @pytest.mark.asyncio
