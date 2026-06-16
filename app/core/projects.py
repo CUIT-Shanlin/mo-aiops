@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 
 class ProjectConfig(BaseModel):
@@ -21,6 +21,15 @@ class ProjectsConfig(BaseModel):
 
     default_project: str
     projects: dict[str, ProjectConfig]
+
+    @model_validator(mode="after")
+    def _validate_default(self) -> "ProjectsConfig":
+        if self.default_project not in self.projects:
+            raise ValueError(
+                f"default_project '{self.default_project}' not in projects: "
+                f"{list(self.projects.keys())}"
+            )
+        return self
 
 
 _ENV_PATTERN = re.compile(r"\$\{(\w+)(?::-(.*?))?\}")
@@ -42,13 +51,20 @@ def _expand_env(value: Any) -> Any:
 _config: ProjectsConfig | None = None
 
 
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
+
 def load_projects_config(path: str | Path | None = None) -> ProjectsConfig:
     """加载并缓存项目配置（进程单例）。"""
     global _config
     if _config is not None:
         return _config
     if path is None:
-        path = Path("config/projects.yaml")
+        from app.core.config import get_settings
+        path = Path(get_settings().projects_config_path)
+    path = Path(path)
+    if not path.is_absolute():
+        path = _PROJECT_ROOT / path
     with open(path) as f:
         raw = yaml.safe_load(f)
     expanded = _expand_env(raw)
