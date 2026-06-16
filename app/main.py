@@ -73,10 +73,10 @@ def get_app() -> FastAPI:
 
     @app.exception_handler(APIError)
     async def api_error_handler(request: Request, exc: APIError) -> JSONResponse:
-        """业务异常 → 统一 body（HTTP 200，code 在 body）。"""
+        """业务异常 → 统一 {code, message, data} body。"""
         return JSONResponse(
             status_code=exc.http_status,
-            content={"code": exc.code, "message": exc.message, "detail": exc.detail},
+            content={"code": exc.code, "message": exc.message, "data": exc.data},
         )
 
     @app.exception_handler(RequestValidationError)
@@ -88,21 +88,18 @@ def get_app() -> FastAPI:
             status_code=200,
             content={
                 "code": ErrorCode.VALIDATION_ERROR,
-                "message": "validation error",
-                "detail": exc.errors(),
+                "message": "参数校验失败",
+                "data": None,
             },
         )
 
     @app.exception_handler(Exception)
     async def unhandled_handler(request: Request, exc: Exception) -> JSONResponse:
-        """兜底未捕获异常 → 统一 body（5xxx），避免漏出 FastAPI 默认 {detail}。
-
-        细节不进 body（防泄漏内部信息），完整堆栈由日志承载。
-        """
+        """兜底未捕获异常 → 50000，不漏 FastAPI 默认 {detail}。"""
         logging.getLogger("unhandled").exception("unhandled exception")
         return JSONResponse(
             status_code=500,
-            content={"code": ErrorCode.INTERNAL, "message": "internal error", "detail": None},
+            content={"code": ErrorCode.INTERNAL, "message": "服务器内部错误", "data": None},
         )
 
     app.include_router(health_router)

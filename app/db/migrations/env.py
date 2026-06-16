@@ -8,8 +8,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from app.core.config import get_settings
 from app.models.base import Base
 
-# 关键：import 所有 model 模块，确保表注册进 metadata（autogenerate 可见）
-import app.models.project  # noqa: F401
+# 后续里程碑新增 model 时在此 import，确保表注册进 metadata
 
 config = context.config
 if config.config_file_name is not None:

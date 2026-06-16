@@ -18,15 +18,19 @@ class Settings(BaseSettings):
     redis_url: str
     redis_db: int = 1
 
-    # 鉴权（与 Java 主服务共享对称 Secret）
+    # 鉴权（AIOps 自签发 JWT）
     jwt_secret: str
     jwt_algorithm: str = "HS256"
 
+    # 管理员（MVP 单 admin，AIOps 自签发）
+    admin_username: str = "admin"
+    admin_password_hash: str = ""  # bcrypt hash，必须通过 env 设置
+
+    # 项目配置文件路径
+    projects_config_path: str = "config/projects.yaml"
+
     # 服务间调用（M0 留位）
     java_service_internal_token: str | None = None
-
-    # 数据源凭证加密密钥（M0 留位，M1 接入 cryptography 解密时启用）
-    datasource_secret_key: str | None = None
 
     # LLM 接入（M0 留位，全局非 per-project）
     llm_provider: str | None = None

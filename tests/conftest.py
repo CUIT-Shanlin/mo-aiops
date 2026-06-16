@@ -4,7 +4,6 @@ import time
 import jwt
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import text
 
 from app.core.config import get_settings
 
@@ -34,11 +33,8 @@ async def app_instance():
 
 @pytest.fixture
 async def _clean_db_and_redis(app_instance):
-    """测试后清业务表与测试 Redis key，保证集成测试间状态隔离。"""
+    """测试后清测试 Redis key，保证集成测试间状态隔离。"""
     yield
-    engine = app_instance.state.engine
-    async with engine.begin() as conn:
-        await conn.execute(text("TRUNCATE TABLE projects RESTART IDENTITY CASCADE"))
     redis = app_instance.state.redis
     keys = await redis.keys("aiops:*")
     if keys:

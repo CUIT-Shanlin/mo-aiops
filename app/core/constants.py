@@ -1,9 +1,9 @@
 """全局常量单点声明：错误码、服务名、Redis key（后缀 + 命名空间拼接）。
 
-错误码分段约定（后续里程碑按域扩展，避免拍脑袋编号）：
-  40xx = 鉴权 / 项目上下文     41xx = 告警域
-  42xx = 自愈域 / 请求校验      43xx = Agent 域
-  5xxx = 系统内部错误
+错误码分段约定（对齐 AIOps_API_文档 §1.3）：
+  40001 = 未登录/Token 失效    40003 = 权限不足
+  40004 = 资源不存在            40022 = 参数校验失败
+  5xxxx = 系统内部错误
 """
 from enum import IntEnum
 
@@ -11,17 +11,18 @@ SERVICE_NAME = "mo-chat-aiops"
 
 
 class ErrorCode(IntEnum):
-    """统一业务错误码（body 内 code 字段）。"""
+    """统一业务错误码（body 内 code 字段），对齐 AIOps_API_文档 §1.3。"""
 
     SUCCESS = 0
-    # 40xx 鉴权 / 上下文
-    INVALID_PROJECT = 4001
-    UNAUTHORIZED = 4010
-    FORBIDDEN = 4030
-    # 42xx 请求校验
-    VALIDATION_ERROR = 4220
-    # 5xxx 系统
-    INTERNAL = 5000
+    # 认证 / 上下文
+    UNAUTHORIZED = 40001       # 未登录 / Token 失效
+    FORBIDDEN = 40003          # 权限不足
+    NOT_FOUND = 40004          # 资源不存在
+    VALIDATION_ERROR = 40022   # 参数校验失败
+    # 系统
+    INTERNAL = 50000           # 服务器内部错误
+    K8S_ERROR = 50001          # Kubernetes API 调用失败
+    EXTERNAL_SERVICE = 50002   # 外部服务连接失败
 
 
 class RedisKey:

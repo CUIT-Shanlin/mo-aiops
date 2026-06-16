@@ -1,23 +1,40 @@
-import uuid
-
 import pytest
 
 from app.core.project_context import resolve_project_id
+from app.core.projects import ProjectConfig, ProjectsConfig, reset_projects_config
 from app.schemas.response import APIError
 
 
-def test_valid_uuid():
-    pid = str(uuid.uuid4())
-    assert resolve_project_id(pid) == pid
+@pytest.fixture(autouse=True)
+def _mock_projects(monkeypatch):
+    """注入测试用项目配置。"""
+    import app.core.projects as mod
+    reset_projects_config()
+    test_config = ProjectsConfig(
+        default_project="test-proj",
+        projects={
+            "test-proj": ProjectConfig(name="Test"),
+            "other-proj": ProjectConfig(name="Other"),
+        },
+    )
+    monkeypatch.setattr(mod, "_config", test_config)
+    yield
+    reset_projects_config()
 
 
-def test_missing_returns_4001():
+def test_missing_header_returns_default():
+    assert resolve_project_id(None) == "test-proj"
+
+
+def test_empty_header_returns_default():
+    assert resolve_project_id("") == "test-proj"
+
+
+def test_valid_project_passes():
+    assert resolve_project_id("other-proj") == "other-proj"
+
+
+def test_unknown_project_raises_40004():
     with pytest.raises(APIError) as e:
-        resolve_project_id(None)
-    assert e.value.code == 4001
-
-
-def test_invalid_format_returns_4001():
-    with pytest.raises(APIError) as e:
-        resolve_project_id("not-a-uuid")
-    assert e.value.code == 4001
+        resolve_project_id("nonexistent")
+    assert e.value.code == 40004

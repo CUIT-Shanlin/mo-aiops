@@ -24,7 +24,7 @@ def test_valid_admin_token():
 def test_expired_token():
     with pytest.raises(APIError) as e:
         decode_and_verify(_token(exp_delta=-10), SECRET, "HS256")
-    assert e.value.code == 4010
+    assert e.value.code == 40001
 
 
 def test_token_without_exp_rejected():
@@ -32,16 +32,16 @@ def test_token_without_exp_rejected():
     token = jwt.encode({"sub": "u1", "role": "admin"}, SECRET, algorithm="HS256")
     with pytest.raises(APIError) as e:
         decode_and_verify(token, SECRET, "HS256")
-    assert e.value.code == 4010
+    assert e.value.code == 40001
 
 
 def test_non_admin_forbidden():
     with pytest.raises(APIError) as e:
         decode_and_verify(_token(role="user"), SECRET, "HS256")
-    assert e.value.code == 4030
+    assert e.value.code == 40003
 
 
 def test_garbage_token():
     with pytest.raises(APIError) as e:
         decode_and_verify("not-a-token", SECRET, "HS256")
-    assert e.value.code == 4010
+    assert e.value.code == 40001

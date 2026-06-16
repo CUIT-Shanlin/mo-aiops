@@ -22,11 +22,11 @@ def decode_and_verify(token: str, secret: str, algorithm: str) -> CurrentUser:
             token, secret, algorithms=[algorithm], options={"require": ["exp"]}
         )
     except jwt.ExpiredSignatureError:
-        raise APIError(ErrorCode.UNAUTHORIZED, "token expired")
+        raise APIError(ErrorCode.UNAUTHORIZED, "Token 已过期，请重新登录")
     except jwt.InvalidTokenError:
-        raise APIError(ErrorCode.UNAUTHORIZED, "invalid token")
+        raise APIError(ErrorCode.UNAUTHORIZED, "无效 Token")
     if payload.get("role") != "admin":
-        raise APIError(ErrorCode.FORBIDDEN, "admin role required")
+        raise APIError(ErrorCode.FORBIDDEN, "权限不足")
     return CurrentUser(user_id=payload.get("sub"), role=payload["role"])
 
 
@@ -35,7 +35,7 @@ async def get_current_user(
 ) -> CurrentUser:
     """FastAPI 依赖：从 Authorization: Bearer 取 token 并校验。"""
     if not authorization or not authorization.startswith("Bearer "):
-        raise APIError(ErrorCode.UNAUTHORIZED, "missing bearer token")
+        raise APIError(ErrorCode.UNAUTHORIZED, "未登录")
     token = authorization.removeprefix("Bearer ").strip()
     settings = get_settings()
     return decode_and_verify(token, settings.jwt_secret, settings.jwt_algorithm)
