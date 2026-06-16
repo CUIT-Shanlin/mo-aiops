@@ -5,15 +5,21 @@ projects:
   mochat-prod:
     name: "mo-chat 生产"
     metric_profile: java
+    enabled: true
     datasources:
       prometheus:
         base_url: "${PROMETHEUS_URL:-http://localhost:9090}"
+        verify_ssl: true
       loki:
         base_url: "${LOKI_URL:-http://localhost:3100}"
         auth_type: NoAuth
+        verify_ssl: true
       tempo:
         base_url: "${TEMPO_URL:-http://localhost:3200}"
+        verify_ssl: true
       kubernetes:
         mode: token
         api_server: "${K8S_API_SERVER:-https://localhost:6443}"
         token: "${K8S_TOKEN:-}"
+        namespaces: ["default"]
+        verify_ssl: false
