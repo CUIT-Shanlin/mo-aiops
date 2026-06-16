@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from kubernetes_asyncio import client, config
@@ -35,6 +36,8 @@ class KubernetesProvider(BaseProvider[KubernetesDatasourceConfig]):
         super().__init__(project_id, datasource_type, config, timeout_seconds)
         self._version_api = version_api
         self._core_v1_api = core_v1_api
+        self._external_version_api = version_api is not None
+        self._external_core_v1_api = core_v1_api is not None
         self._api_client: Any | None = None
         self._owns_api_client = False
 
@@ -47,6 +50,10 @@ class KubernetesProvider(BaseProvider[KubernetesDatasourceConfig]):
                     await result
         self._api_client = None
         self._owns_api_client = False
+        if not self._external_version_api:
+            self._version_api = None
+        if not self._external_core_v1_api:
+            self._core_v1_api = None
 
     async def _query(self, **kwargs: Any) -> Any:
         command_type = kwargs.pop("command_type", None)
@@ -64,8 +71,11 @@ class KubernetesProvider(BaseProvider[KubernetesDatasourceConfig]):
 
     async def validate_scopes(self) -> dict[str, bool | str]:
         try:
-            await (await self._get_version_api()).get_code()
+            version_api = await self._get_version_api()
+            await asyncio.wait_for(version_api.get_code(), timeout=self.timeout_seconds)
             return {"connectivity": True}
+        except asyncio.TimeoutError as exc:
+            return _connectivity_summary(exc)
         except Exception as exc:
             return _connectivity_summary(exc)
 

@@ -1,4 +1,6 @@
+import asyncio
 import pytest
+import time
 
 from app.core.projects import KubernetesDatasourceConfig, KubernetesMode
 from app.providers.base import ProviderError
@@ -210,6 +212,33 @@ async def test_validate_scopes_redacts_runtime_error_message():
 
     assert result == {"connectivity": False, "error": "RuntimeError"}
     assert "secret-token" not in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_validate_scopes_times_out_quickly():
+    class SlowVersionApi:
+        async def get_code(self):
+            await asyncio.sleep(0.05)
+            return {"gitVersion": "v1.30.4"}
+
+    provider = KubernetesProvider(
+        project_id="proj-a",
+        datasource_type="kubernetes",
+        config=KubernetesDatasourceConfig(
+            mode=KubernetesMode.TOKEN,
+            api_server="https://k8s.example",
+        ),
+        timeout_seconds=0.01,
+        version_api=SlowVersionApi(),
+    )
+
+    start = time.perf_counter()
+    result = await provider.validate_scopes()
+    elapsed = time.perf_counter() - start
+
+    assert result["connectivity"] is False
+    assert "TimeoutError" in result["error"] or "timeout" in result["error"].lower()
+    assert elapsed < 0.03
 
 
 @pytest.mark.asyncio
@@ -447,3 +476,63 @@ async def test_close_is_idempotent():
     assert client.close_calls == 1
     assert provider._api_client is None
     assert provider._owns_api_client is False
+
+
+@pytest.mark.asyncio
+async def test_close_clears_cached_apis_and_recreates_them_after_reopen(monkeypatch):
+    captured = {"api_client_ids": [], "version_api_ids": []}
+
+    class FakeConfiguration:
+        def __init__(self, host=None):
+            self.host = host
+            self.verify_ssl = None
+            self.api_key = {}
+            self.api_key_prefix = {}
+
+    class FakeApiClient:
+        def __init__(self, configuration=None):
+            self.configuration = configuration
+            self.closed = False
+
+        async def close(self):
+            self.closed = True
+
+    class FakeVersionApi:
+        def __init__(self, api_client):
+            captured["api_client_ids"].append(id(api_client))
+            captured["version_api_ids"].append(id(self))
+            self.api_client = api_client
+
+        async def get_code(self):
+            return {"gitVersion": "v1.30.5"}
+
+    monkeypatch.setattr("app.providers.kubernetes.client.Configuration", FakeConfiguration)
+    monkeypatch.setattr("app.providers.kubernetes.client.ApiClient", FakeApiClient)
+    monkeypatch.setattr("app.providers.kubernetes.client.VersionApi", FakeVersionApi)
+
+    provider = KubernetesProvider(
+        project_id="proj-a",
+        datasource_type="kubernetes",
+        config=KubernetesDatasourceConfig(
+            mode=KubernetesMode.TOKEN,
+            api_server="https://k8s.example",
+        ),
+    )
+
+    first = await provider.query(command_type="version")
+    first_api_client = provider._api_client
+    first_version_api = provider._version_api
+
+    await provider.close()
+
+    second = await provider.query(command_type="version")
+
+    assert first == {"gitVersion": "v1.30.5"}
+    assert second == {"gitVersion": "v1.30.5"}
+    assert first_api_client is not None
+    assert first_version_api is not None
+    assert first_api_client.closed is True
+    assert provider._api_client is not first_api_client
+    assert provider._version_api is not first_version_api
+    assert len(captured["api_client_ids"]) == 2
+    assert len(set(captured["api_client_ids"])) == 2
