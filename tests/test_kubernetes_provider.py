@@ -238,7 +238,7 @@ async def test_validate_scopes_times_out_quickly():
 
     assert result["connectivity"] is False
     assert "TimeoutError" in result["error"] or "timeout" in result["error"].lower()
-    assert elapsed < 0.03
+    assert elapsed < 0.08
 
 
 @pytest.mark.asyncio

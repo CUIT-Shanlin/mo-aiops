@@ -136,6 +136,22 @@ async def test_prometheus_validate_scopes_redacts_body_on_failure():
 
 
 @pytest.mark.asyncio
+async def test_prometheus_non_2xx_raises_provider_error_without_body():
+    session = FakeSession(FakeResponse(status=500, text_value="secret-token leaked"))
+    provider = PrometheusProvider(
+        project_id="proj-a",
+        datasource_type="prometheus",
+        config=PrometheusDatasourceConfig(base_url="http://prom:9090"),
+        session=session,
+    )
+
+    with pytest.raises(ProviderError, match="HTTP 500") as excinfo:
+        await provider.query(query_type="instant", query="up")
+
+    assert "secret-token" not in str(excinfo.value)
+
+
+@pytest.mark.asyncio
 async def test_prometheus_verify_ssl_false_is_passed_to_request():
     session = FakeSession(FakeResponse(payload={"status": "success"}))
     provider = PrometheusProvider(
@@ -296,6 +312,22 @@ async def test_loki_non_2xx_raises_provider_error():
 
 
 @pytest.mark.asyncio
+async def test_loki_non_2xx_raises_provider_error_without_body():
+    session = FakeSession(FakeResponse(status=500, text_value="secret-token leaked"))
+    provider = LokiProvider(
+        project_id="proj-a",
+        datasource_type="loki",
+        config=LokiDatasourceConfig(base_url="http://loki:3100"),
+        session=session,
+    )
+
+    with pytest.raises(ProviderError, match="HTTP 500") as excinfo:
+        await provider.query(query='{job="app"}')
+
+    assert "secret-token" not in str(excinfo.value)
+
+
+@pytest.mark.asyncio
 async def test_loki_verify_ssl_false_is_passed_to_request():
     session = FakeSession(FakeResponse(payload={"data": []}))
     provider = LokiProvider(
@@ -426,6 +458,22 @@ async def test_tempo_non_2xx_raises_provider_error():
 
     with pytest.raises(ProviderError, match="HTTP 500"):
         await provider.query(query_type="search", service_name="checkout")
+
+
+@pytest.mark.asyncio
+async def test_tempo_non_2xx_raises_provider_error_without_body():
+    session = FakeSession(FakeResponse(status=500, text_value="secret-token leaked"))
+    provider = TempoProvider(
+        project_id="proj-a",
+        datasource_type="tempo",
+        config=TempoDatasourceConfig(base_url="http://tempo:3200"),
+        session=session,
+    )
+
+    with pytest.raises(ProviderError, match="HTTP 500") as excinfo:
+        await provider.query(query_type="search", service_name="checkout")
+
+    assert "secret-token" not in str(excinfo.value)
 
 
 @pytest.mark.asyncio

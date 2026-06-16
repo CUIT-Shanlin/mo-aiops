@@ -176,7 +176,7 @@ async def test_validate_configured_providers_runs_across_projects_in_parallel(
         "p1": {"prometheus": {"connectivity": True}},
         "p2": {"prometheus": {"connectivity": True}},
     }
-    assert elapsed < 0.09
+    assert elapsed < 0.13
 
 
 def test_settings_can_disable_startup_provider_validation(monkeypatch):

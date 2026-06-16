@@ -84,9 +84,7 @@ class PrometheusProvider(BaseProvider[PrometheusDatasourceConfig]):
         url = urljoin(self.config.base_url.rstrip("/") + "/", path.lstrip("/"))
         async with session.get(url, **request_kwargs) as response:
             if response.status < 200 or response.status >= 300:
-                body = await response.text()
-                body = body[:200]
-                raise ProviderError(f"HTTP {response.status} calling {path}: {body}")
+                raise ProviderError(f"HTTP {response.status}")
             return await response.json() if parse_json else await response.text()
 
     async def _ensure_session(self) -> aiohttp.ClientSession:
