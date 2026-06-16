@@ -183,6 +183,59 @@ def test_structured_failure_falls_back_to_raw_json_result():
     assert model.fallback_calls == 1
 
 
+def test_llm_client_rejects_non_positive_retry_count():
+    class FakeJsonModel:
+        async def ainvoke(self, messages):
+            return type(
+                "FakeMessage",
+                (),
+                {"content": '{"action":"restart","confidence":0.8}'},
+            )()
+
+    with pytest.raises(ValueError, match="max_retries must be at least 1"):
+        LLMClient(FakeJsonModel(), max_retries=0)
+
+
+def test_structured_and_fallback_paths_retry_the_same_number_of_times():
+    class FailingStructuredModel:
+        async def ainvoke(self, messages):
+            raise ValueError("structured failed")
+
+    class CountingModel:
+        def __init__(self):
+            self.structured_calls = 0
+            self.raw_calls = 0
+
+        def with_structured_output(self, schema):
+            model = self
+
+            class StructuredWrapper:
+                async def ainvoke(self, messages):
+                    model.structured_calls += 1
+                    return FailingStructuredModel()
+
+            return StructuredWrapper()
+
+        async def ainvoke(self, messages):
+            self.raw_calls += 1
+            raise ValueError("raw failed")
+
+    model = CountingModel()
+    client = LLMClient(model, max_retries=2)
+
+    with pytest.raises(
+        LLMStructuredOutputError, match="LLM structured output validation failed"
+    ):
+        asyncio.run(
+            client.ainvoke_structured(
+                [{"role": "user", "content": "restart"}], ActionSchema
+            )
+        )
+
+    assert model.structured_calls == 2
+    assert model.raw_calls == 2
+
+
 def test_timeout_raises_structured_output_error():
     class SlowModel:
         async def ainvoke(self, messages):
@@ -233,6 +286,66 @@ def test_build_chat_model_passes_openai_compatible_config(monkeypatch):
         "api_key": "api-key",
         "base_url": "https://example.com/v1",
     }
+
+
+def test_build_chat_model_allows_openai_without_base_url(monkeypatch):
+    captured = {}
+
+    class FakeChatOpenAI:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr("app.agent.llm.ChatOpenAI", FakeChatOpenAI)
+
+    settings = Settings(
+        _env_file=None,
+        database_url="postgresql+asyncpg://u:p@localhost/db",
+        redis_url="redis://localhost:6379",
+        jwt_secret="secret",
+        llm_provider="openai",
+        llm_api_key="api-key",
+        llm_model="gpt-4o-mini",
+    )
+
+    model = build_chat_model(settings)
+
+    assert isinstance(model, FakeChatOpenAI)
+    assert captured == {
+        "model": "gpt-4o-mini",
+        "api_key": "api-key",
+    }
+
+
+def test_build_chat_model_requires_qwen_base_url_without_leaking_secret():
+    secret = "super-secret-token"
+    settings = Settings(
+        _env_file=None,
+        database_url="postgresql+asyncpg://u:p@localhost/db",
+        redis_url="redis://localhost:6379",
+        jwt_secret="secret",
+        llm_provider="qwen",
+        llm_api_key=secret,
+        llm_model="qwen-plus",
+    )
+
+    with pytest.raises(LLMNotConfiguredError, match="LLM base_url is required for qwen provider"):
+        build_chat_model(settings)
+
+
+def test_build_chat_model_rejects_unknown_provider_without_leaking_secret():
+    secret = "super-secret-token"
+    settings = Settings(
+        _env_file=None,
+        database_url="postgresql+asyncpg://u:p@localhost/db",
+        redis_url="redis://localhost:6379",
+        jwt_secret="secret",
+        llm_provider="anthropic",
+        llm_api_key=secret,
+        llm_model="claude-3",
+    )
+
+    with pytest.raises(LLMNotConfiguredError, match="unsupported LLM provider 'anthropic'"):
+        build_chat_model(settings)
 
 
 def test_build_chat_model_missing_config_does_not_leak_secret():

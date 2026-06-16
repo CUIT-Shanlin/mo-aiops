@@ -38,6 +38,12 @@ def build_chat_model(settings: Settings | None = None) -> Any:
     if ChatOpenAI is None:  # pragma: no cover - dependency import guard
         raise LLMError("LLM backend is unavailable") from _chat_openai_import_error
 
+    provider = cfg.llm_provider.lower()
+    if provider not in {"openai", "qwen"}:
+        raise LLMNotConfiguredError(f"unsupported LLM provider '{cfg.llm_provider}'")
+    if provider == "qwen" and not cfg.llm_base_url:
+        raise LLMNotConfiguredError("LLM base_url is required for qwen provider")
+
     kwargs: dict[str, Any] = {
         "model": cfg.llm_model,
         "api_key": cfg.llm_api_key,
@@ -55,6 +61,8 @@ class LLMClient:
         max_retries: int = 3,
         timeout_seconds: float = 30.0,
     ) -> None:
+        if max_retries < 1:
+            raise ValueError("max_retries must be at least 1")
         self.model = model
         self.max_retries = max_retries
         self.timeout_seconds = timeout_seconds
