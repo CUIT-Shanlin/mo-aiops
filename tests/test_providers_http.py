@@ -49,6 +49,22 @@ class FakeSession:
         self.closed = True
 
 
+class SequentialResponseSession:
+    def __init__(self, responses: list[FakeResponse]) -> None:
+        self.responses = responses
+        self.calls: list[tuple[str, dict[str, object]]] = []
+        self.closed = False
+
+    def get(self, url: str, **kwargs):
+        self.calls.append((url, kwargs))
+        if not self.responses:
+            raise AssertionError("unexpected extra request")
+        return self.responses.pop(0)
+
+    async def close(self) -> None:
+        self.closed = True
+
+
 @pytest.mark.asyncio
 async def test_prometheus_instant_query_uses_api_and_query_param():
     session = FakeSession(FakeResponse(payload={"status": "success"}))
@@ -64,6 +80,20 @@ async def test_prometheus_instant_query_uses_api_and_query_param():
     assert session.calls == [
         ("http://prom:9090/api/v1/query", {"params": {"query": "up"}, "ssl": True})
     ]
+
+
+@pytest.mark.asyncio
+async def test_prometheus_unknown_query_type_raises_provider_error():
+    session = FakeSession(FakeResponse(payload={"status": "success"}))
+    provider = PrometheusProvider(
+        project_id="proj-a",
+        datasource_type="prometheus",
+        config=PrometheusDatasourceConfig(base_url="http://prom:9090"),
+        session=session,
+    )
+
+    with pytest.raises(ProviderError, match="unsupported prometheus query_type"):
+        await provider.query(query_type="bad", query="up")
 
 
 @pytest.mark.asyncio
@@ -169,6 +199,20 @@ async def test_tempo_trace_query_uses_trace_endpoint():
 
 
 @pytest.mark.asyncio
+async def test_tempo_unknown_query_type_raises_provider_error():
+    session = FakeSession(FakeResponse(payload={"data": []}))
+    provider = TempoProvider(
+        project_id="proj-a",
+        datasource_type="tempo",
+        config=TempoDatasourceConfig(base_url="http://tempo:3200"),
+        session=session,
+    )
+
+    with pytest.raises(ProviderError, match="unsupported tempo query_type"):
+        await provider.query(query_type="bad")
+
+
+@pytest.mark.asyncio
 async def test_tempo_search_query_filters_none_params():
     session = FakeSession(FakeResponse(payload={"data": []}))
     provider = TempoProvider(
@@ -230,6 +274,30 @@ async def test_validate_scopes_success_returns_connectivity_true():
 
 
 @pytest.mark.asyncio
+async def test_tempo_validate_scopes_falls_back_to_search_on_ready_failure():
+    session = SequentialResponseSession(
+        [
+            FakeResponse(status=503, text_value="not ready"),
+            FakeResponse(status=200, payload={"data": []}),
+        ]
+    )
+    provider = TempoProvider(
+        project_id="proj-a",
+        datasource_type="tempo",
+        config=TempoDatasourceConfig(base_url="http://tempo:3200"),
+        session=session,
+    )
+
+    result = await provider.validate_scopes()
+
+    assert result == {"connectivity": True}
+    assert session.calls == [
+        ("http://tempo:3200/ready", {"ssl": True}),
+        ("http://tempo:3200/api/search", {"ssl": True}),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_close_does_not_close_injected_session():
     session = FakeSession(FakeResponse(payload={"status": "success"}))
     provider = PrometheusProvider(
@@ -242,3 +310,33 @@ async def test_close_does_not_close_injected_session():
     await provider.close()
 
     assert session.closed is False
+
+
+@pytest.mark.asyncio
+async def test_lazy_session_creation_and_close_for_prometheus(monkeypatch):
+    created_sessions: list[FakeSession] = []
+
+    class FakeClientSession(FakeSession):
+        def __init__(self) -> None:
+            super().__init__(FakeResponse(payload={"status": "success"}))
+            created_sessions.append(self)
+
+    monkeypatch.setattr(
+        "app.providers.prometheus.aiohttp.ClientSession",
+        FakeClientSession,
+    )
+
+    provider = PrometheusProvider(
+        project_id="proj-a",
+        datasource_type="prometheus",
+        config=PrometheusDatasourceConfig(base_url="http://prom:9090"),
+    )
+
+    assert created_sessions == []
+
+    await provider.query(query_type="instant", query="up")
+    assert len(created_sessions) == 1
+    assert created_sessions[0].closed is False
+
+    await provider.close()
+    assert created_sessions[0].closed is True
