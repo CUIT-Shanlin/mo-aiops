@@ -95,7 +95,7 @@ def test_unknown_datasource_key_is_preserved():
     assert "custom" not in project.datasource_configs
 
 
-def test_sensitive_fields_not_in_repr():
+def test_sensitive_fields_not_in_repr_or_dump():
     project = ProjectConfig(
         name="Demo",
         datasources={
@@ -113,5 +113,12 @@ def test_sensitive_fields_not_in_repr():
     )
 
     text = repr(project)
+    dumped = project.model_dump()
+    dumped_json = project.model_dump_json()
+
     assert "secret-token" not in text
     assert "secret-pass" not in text
+    assert "secret-token" not in dumped_json
+    assert "secret-pass" not in dumped_json
+    assert "datasources" not in dumped
+    assert "datasource_configs" not in dumped

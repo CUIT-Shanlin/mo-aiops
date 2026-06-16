@@ -32,7 +32,7 @@ class PrometheusDatasourceConfig(BaseModel):
 
     base_url: str
     username: str | None = None
-    password: str | None = Field(default=None, repr=False)
+    password: str | None = Field(default=None, repr=False, exclude=True)
     verify_ssl: bool = True
 
 
@@ -42,8 +42,8 @@ class LokiDatasourceConfig(BaseModel):
     base_url: str
     auth_type: LokiAuthType = LokiAuthType.NO_AUTH
     username: str | None = None
-    password: str | None = Field(default=None, repr=False)
-    tenant_id: str | None = Field(default=None, repr=False)
+    password: str | None = Field(default=None, repr=False, exclude=True)
+    tenant_id: str | None = Field(default=None, repr=False, exclude=True)
     verify_ssl: bool = True
 
 
@@ -52,7 +52,7 @@ class TempoDatasourceConfig(BaseModel):
 
     base_url: str
     username: str | None = None
-    password: str | None = Field(default=None, repr=False)
+    password: str | None = Field(default=None, repr=False, exclude=True)
     verify_ssl: bool = True
 
 
@@ -61,7 +61,7 @@ class KubernetesDatasourceConfig(BaseModel):
 
     mode: KubernetesMode
     api_server: str | None = None
-    token: str | None = Field(default=None, repr=False)
+    token: str | None = Field(default=None, repr=False, exclude=True)
     kubeconfig_path: str | None = None
     namespaces: list[str] = Field(default_factory=list)
     verify_ssl: bool = True
@@ -97,9 +97,9 @@ class ProjectConfig(BaseModel):
     name: str
     metric_profile: str = "java"
     enabled: bool = True
-    datasources: dict[str, Any] = Field(default_factory=dict, repr=False)
+    datasources: dict[str, Any] = Field(default_factory=dict, repr=False, exclude=True)
     datasource_configs: dict[str, DatasourceConfig] = Field(
-        default_factory=dict, repr=False
+        default_factory=dict, repr=False, exclude=True
     )
 
     @model_validator(mode="after")
