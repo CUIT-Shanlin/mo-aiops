@@ -37,8 +37,10 @@ class FakeCoreV1Api:
 class FakeApiClient:
     def __init__(self):
         self.closed = False
+        self.close_calls = 0
 
     async def close(self):
+        self.close_calls += 1
         self.closed = True
 
 
@@ -158,6 +160,59 @@ async def test_validate_scopes_redacts_secret_on_failure():
 
 
 @pytest.mark.asyncio
+async def test_validate_scopes_includes_status_and_reason():
+    class FakeApiException(Exception):
+        def __init__(self):
+            self.status = 403
+            self.reason = "Forbidden"
+
+    class FailingVersionApi:
+        async def get_code(self):
+            raise FakeApiException()
+
+    provider = KubernetesProvider(
+        project_id="proj-a",
+        datasource_type="kubernetes",
+        config=KubernetesDatasourceConfig(
+            mode=KubernetesMode.TOKEN,
+            api_server="https://k8s.example",
+            token="secret-token",
+        ),
+        version_api=FailingVersionApi(),
+    )
+
+    result = await provider.validate_scopes()
+
+    assert result["connectivity"] is False
+    assert "status=403" in result["error"]
+    assert "reason=Forbidden" in result["error"]
+    assert "secret-token" not in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_validate_scopes_redacts_runtime_error_message():
+    class FailingVersionApi:
+        async def get_code(self):
+            raise RuntimeError("boom secret-token")
+
+    provider = KubernetesProvider(
+        project_id="proj-a",
+        datasource_type="kubernetes",
+        config=KubernetesDatasourceConfig(
+            mode=KubernetesMode.TOKEN,
+            api_server="https://k8s.example",
+            token="secret-token",
+        ),
+        version_api=FailingVersionApi(),
+    )
+
+    result = await provider.validate_scopes()
+
+    assert result == {"connectivity": False, "error": "RuntimeError"}
+    assert "secret-token" not in result["error"]
+
+
+@pytest.mark.asyncio
 async def test_token_mode_get_api_client_sets_configuration(monkeypatch):
     captured = {}
 
@@ -194,6 +249,81 @@ async def test_token_mode_get_api_client_sets_configuration(monkeypatch):
     assert configuration.verify_ssl is False
     assert configuration.api_key["BearerToken"] == "secret-token"
     assert configuration.api_key_prefix["BearerToken"] == "Bearer"
+
+
+@pytest.mark.asyncio
+async def test_in_cluster_query_creates_api_client(monkeypatch):
+    captured = {}
+
+    class FakeApiClient:
+        def __init__(self):
+            captured["api_client_created"] = True
+
+    class FakeVersionApi:
+        def __init__(self, api_client):
+            captured["version_api_client"] = api_client
+
+        async def get_code(self):
+            return {"gitVersion": "v1.30.2"}
+
+    def fake_load_incluster_config():
+        captured["load_incluster_config"] = True
+
+    monkeypatch.setattr("app.providers.kubernetes.config.load_incluster_config", fake_load_incluster_config)
+    monkeypatch.setattr("app.providers.kubernetes.client.ApiClient", FakeApiClient)
+    monkeypatch.setattr("app.providers.kubernetes.client.VersionApi", FakeVersionApi)
+
+    provider = KubernetesProvider(
+        project_id="proj-a",
+        datasource_type="kubernetes",
+        config=KubernetesDatasourceConfig(mode=KubernetesMode.IN_CLUSTER),
+    )
+
+    result = await provider.query(command_type="version")
+
+    assert result == {"gitVersion": "v1.30.2"}
+    assert captured["load_incluster_config"] is True
+    assert captured["api_client_created"] is True
+    assert isinstance(captured["version_api_client"], FakeApiClient)
+
+
+@pytest.mark.asyncio
+async def test_kubeconfig_query_creates_api_client(monkeypatch):
+    captured = {}
+
+    class FakeApiClient:
+        def __init__(self):
+            captured["api_client_created"] = True
+
+    class FakeVersionApi:
+        def __init__(self, api_client):
+            captured["version_api_client"] = api_client
+
+        async def get_code(self):
+            return {"gitVersion": "v1.30.3"}
+
+    async def fake_load_kube_config(config_file=None):
+        captured["config_file"] = config_file
+
+    monkeypatch.setattr("app.providers.kubernetes.config.load_kube_config", fake_load_kube_config)
+    monkeypatch.setattr("app.providers.kubernetes.client.ApiClient", FakeApiClient)
+    monkeypatch.setattr("app.providers.kubernetes.client.VersionApi", FakeVersionApi)
+
+    provider = KubernetesProvider(
+        project_id="proj-a",
+        datasource_type="kubernetes",
+        config=KubernetesDatasourceConfig(
+            mode=KubernetesMode.KUBECONFIG,
+            kubeconfig_path="/tmp/kubeconfig",
+        ),
+    )
+
+    result = await provider.query(command_type="version")
+
+    assert result == {"gitVersion": "v1.30.3"}
+    assert captured["config_file"] == "/tmp/kubeconfig"
+    assert captured["api_client_created"] is True
+    assert isinstance(captured["version_api_client"], FakeApiClient)
 
 
 @pytest.mark.asyncio
@@ -296,4 +426,24 @@ async def test_close_closes_owned_api_client():
 
     await provider.close()
 
-    assert provider._api_client.closed is True
+    assert provider._api_client is None
+    assert provider._owns_api_client is False
+
+
+@pytest.mark.asyncio
+async def test_close_is_idempotent():
+    provider = KubernetesProvider(
+        project_id="proj-a",
+        datasource_type="kubernetes",
+        config=KubernetesDatasourceConfig(mode=KubernetesMode.TOKEN, api_server="https://k8s.example"),
+    )
+    client = FakeApiClient()
+    provider._api_client = client
+    provider._owns_api_client = True
+
+    await provider.close()
+    await provider.close()
+
+    assert client.close_calls == 1
+    assert provider._api_client is None
+    assert provider._owns_api_client is False

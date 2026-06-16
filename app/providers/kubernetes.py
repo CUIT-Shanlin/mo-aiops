@@ -45,6 +45,8 @@ class KubernetesProvider(BaseProvider[KubernetesDatasourceConfig]):
                 result = close()
                 if hasattr(result, "__await__"):
                     await result
+        self._api_client = None
+        self._owns_api_client = False
 
     async def _query(self, **kwargs: Any) -> Any:
         command_type = kwargs.pop("command_type", None)
@@ -62,10 +64,8 @@ class KubernetesProvider(BaseProvider[KubernetesDatasourceConfig]):
 
     async def validate_scopes(self) -> dict[str, bool | str]:
         try:
-            await self.query(command_type="version")
+            await (await self._get_version_api()).get_code()
             return {"connectivity": True}
-        except ProviderError as exc:
-            return _connectivity_summary(exc)
         except Exception as exc:
             return _connectivity_summary(exc)
 
