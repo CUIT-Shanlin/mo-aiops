@@ -4,7 +4,7 @@ import asyncio
 import json
 from typing import Any
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from app.core.config import Settings, get_settings
 
@@ -100,15 +100,8 @@ class LLMClient:
     ) -> BaseModel:
         structured_model = self._build_structured_model(schema)
         if structured_model is not None:
-            try:
-                structured_result = await structured_model.ainvoke(messages)
-                parsed = self._coerce_schema_result(structured_result, schema)
-                if parsed is not None:
-                    return parsed
-            except NotImplementedError:
-                pass
-            except (ValidationError, json.JSONDecodeError, TypeError, ValueError):
-                pass
+            structured_result = await structured_model.ainvoke(messages)
+            return self._coerce_schema_result(structured_result, schema)
 
         fallback_result = await self.model.ainvoke(messages)
         return self._parse_fallback_result(fallback_result, schema)
@@ -129,7 +122,7 @@ class LLMClient:
         self,
         result: Any,
         schema: type[BaseModel],
-    ) -> BaseModel | None:
+    ) -> BaseModel:
         if isinstance(result, schema):
             return result
         return schema.model_validate(result)

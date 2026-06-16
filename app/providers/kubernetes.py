@@ -64,10 +64,18 @@ class KubernetesProvider(BaseProvider[KubernetesDatasourceConfig]):
             core_v1_api = await self._get_core_v1_api()
             if namespace:
                 return await core_v1_api.list_namespaced_pod(namespace)
-            return await core_v1_api.list_pod_for_all_namespaces()
+            pods = [
+                await core_v1_api.list_namespaced_pod(configured_namespace)
+                for configured_namespace in self.config.namespaces
+            ]
+            return {"items": _merge_items(pods)}
         if command_type == "list_nodes":
             return await (await self._get_core_v1_api()).list_node()
         raise ProviderError(f"unsupported kubernetes command_type: {command_type}")
+
+    async def _notify(self, **kwargs: Any) -> Any:
+        action_type = kwargs.get("action_type") or kwargs.get("action")
+        raise ProviderError(f"unsupported kubernetes action_type: {action_type}")
 
     async def validate_scopes(self) -> dict[str, bool | str]:
         try:
@@ -113,3 +121,13 @@ class KubernetesProvider(BaseProvider[KubernetesDatasourceConfig]):
             api_client = await self._get_api_client()
             self._core_v1_api = client.CoreV1Api(api_client)
         return self._core_v1_api
+
+
+def _merge_items(results: list[Any]) -> list[Any]:
+    items: list[Any] = []
+    for result in results:
+        if isinstance(result, dict):
+            items.extend(result.get("items", []))
+            continue
+        items.extend(getattr(result, "items", []) or [])
+    return items

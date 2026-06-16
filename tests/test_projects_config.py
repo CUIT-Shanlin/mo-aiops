@@ -56,6 +56,28 @@ def test_prometheus_datasource_schema_validation():
     assert "prometheus" in str(exc.value)
 
 
+def test_datasource_schema_validation_error_redacts_secret_input_values():
+    with pytest.raises(ValidationError) as exc:
+        ProjectConfig(
+            name="P1",
+            datasources={
+                "loki": {
+                    "base_url": "http://loki:3100",
+                    "auth_type": "Basic",
+                    "username": "admin",
+                    "password": ["secret-password"],
+                    "tenant_id": "secret-tenant",
+                }
+            },
+        )
+
+    text = str(exc.value)
+    assert "invalid loki datasource config" in text
+    assert "secret-password" not in text
+    assert "secret-tenant" not in text
+    assert "input_value" not in text
+
+
 def test_loki_auth_type_string_parses():
     project = ProjectConfig(
         name="Demo",

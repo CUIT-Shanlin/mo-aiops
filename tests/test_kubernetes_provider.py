@@ -18,9 +18,10 @@ class FakeVersionApi:
 
 
 class FakeCoreV1Api:
-    def __init__(self, pods_result=None, nodes_result=None):
+    def __init__(self, pods_result=None, nodes_result=None, pods_by_namespace=None):
         self.pods_result = pods_result
         self.nodes_result = nodes_result
+        self.pods_by_namespace = pods_by_namespace or {}
         self.calls = []
 
     async def list_pod_for_all_namespaces(self):
@@ -29,6 +30,8 @@ class FakeCoreV1Api:
 
     async def list_namespaced_pod(self, namespace):
         self.calls.append(("list_namespaced_pod", namespace))
+        if namespace in self.pods_by_namespace:
+            return self.pods_by_namespace[namespace]
         return self.pods_result
 
     async def list_node(self):
@@ -63,19 +66,50 @@ async def test_query_version_uses_injected_version_api():
 
 
 @pytest.mark.asyncio
-async def test_query_list_pods_uses_all_namespaces_without_namespace():
-    core_v1_api = FakeCoreV1Api(pods_result={"items": ["pod-a", "pod-b"]})
+async def test_query_list_pods_uses_configured_namespaces_without_namespace():
+    core_v1_api = FakeCoreV1Api(
+        pods_by_namespace={
+            "default": {"items": ["pod-a"]},
+            "monitoring": {"items": ["pod-b"]},
+        }
+    )
     provider = KubernetesProvider(
         project_id="proj-a",
         datasource_type="kubernetes",
-        config=KubernetesDatasourceConfig(mode=KubernetesMode.TOKEN, api_server="https://k8s.example"),
+        config=KubernetesDatasourceConfig(
+            mode=KubernetesMode.TOKEN,
+            api_server="https://k8s.example",
+            namespaces=["default", "monitoring"],
+        ),
         core_v1_api=core_v1_api,
     )
 
     result = await provider.query(command_type="list_pods")
 
     assert result == {"items": ["pod-a", "pod-b"]}
-    assert core_v1_api.calls == [("list_pod_for_all_namespaces",)]
+    assert core_v1_api.calls == [
+        ("list_namespaced_pod", "default"),
+        ("list_namespaced_pod", "monitoring"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_query_list_pods_without_namespace_and_without_configured_namespaces_returns_empty_items():
+    core_v1_api = FakeCoreV1Api(pods_result={"items": ["pod-a", "pod-b"]})
+    provider = KubernetesProvider(
+        project_id="proj-a",
+        datasource_type="kubernetes",
+        config=KubernetesDatasourceConfig(
+            mode=KubernetesMode.TOKEN,
+            api_server="https://k8s.example",
+        ),
+        core_v1_api=core_v1_api,
+    )
+
+    result = await provider.query(command_type="list_pods")
+
+    assert result == {"items": []}
+    assert core_v1_api.calls == []
 
 
 @pytest.mark.asyncio
@@ -120,6 +154,36 @@ async def test_query_unknown_command_type_raises_provider_error():
 
     with pytest.raises(ProviderError, match="unsupported kubernetes command_type"):
         await provider.query(command_type="unsupported")
+
+
+def test_kubernetes_provider_supports_notify():
+    provider = KubernetesProvider(
+        project_id="proj-a",
+        datasource_type="kubernetes",
+        config=KubernetesDatasourceConfig(mode=KubernetesMode.TOKEN, api_server="https://k8s.example"),
+    )
+
+    assert provider.supports_notify() is True
+
+
+@pytest.mark.asyncio
+async def test_notify_unknown_action_type_raises_provider_error_without_secret():
+    provider = KubernetesProvider(
+        project_id="proj-a",
+        datasource_type="kubernetes",
+        config=KubernetesDatasourceConfig(
+            mode=KubernetesMode.TOKEN,
+            api_server="https://k8s.example",
+            token="secret-token",
+        ),
+    )
+
+    with pytest.raises(ProviderError) as excinfo:
+        await provider.notify(action_type="restart_deployment")
+
+    message = str(excinfo.value)
+    assert message == "unsupported kubernetes action_type: restart_deployment"
+    assert "secret-token" not in message
 
 
 @pytest.mark.asyncio

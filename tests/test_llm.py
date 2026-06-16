@@ -151,7 +151,7 @@ def test_not_implemented_structured_output_falls_back_to_json():
     assert model.calls == 1
 
 
-def test_structured_failure_falls_back_to_raw_json_result():
+def test_structured_validation_failure_retries_without_raw_json_fallback():
     class FakeStructuredModel:
         async def ainvoke(self, messages):
             return {"action": "restart"}
@@ -172,15 +172,18 @@ def test_structured_failure_falls_back_to_raw_json_result():
             )()
 
     model = FakeModel()
-    client = LLMClient(model, max_retries=1)
-    result = asyncio.run(
-        client.ainvoke_structured(
-            [{"role": "user", "content": "restart"}], ActionSchema
-        )
-    )
+    client = LLMClient(model, max_retries=2)
 
-    assert result == ActionSchema(action="restart", confidence=0.8)
-    assert model.fallback_calls == 1
+    with pytest.raises(
+        LLMStructuredOutputError, match="LLM structured output validation failed"
+    ):
+        asyncio.run(
+            client.ainvoke_structured(
+                [{"role": "user", "content": "restart"}], ActionSchema
+            )
+        )
+
+    assert model.fallback_calls == 0
 
 
 def test_llm_client_rejects_non_positive_retry_count():
@@ -196,7 +199,7 @@ def test_llm_client_rejects_non_positive_retry_count():
         LLMClient(FakeJsonModel(), max_retries=0)
 
 
-def test_structured_and_fallback_paths_retry_the_same_number_of_times():
+def test_structured_failures_retry_structured_path_only_when_supported():
     class FailingStructuredModel:
         async def ainvoke(self, messages):
             raise ValueError("structured failed")
@@ -233,7 +236,7 @@ def test_structured_and_fallback_paths_retry_the_same_number_of_times():
         )
 
     assert model.structured_calls == 2
-    assert model.raw_calls == 2
+    assert model.raw_calls == 0
 
 
 def test_timeout_raises_structured_output_error():

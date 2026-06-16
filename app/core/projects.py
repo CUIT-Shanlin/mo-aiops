@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Iterator, TypeAlias, cast
 
 import yaml
-from pydantic import BaseModel, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from app.metrics_profile import get_profile
 from app.metrics_profile.base import UnknownProfileError
@@ -94,6 +94,8 @@ _SUPPORTED_DATASOURCE_MODELS: dict[str, type[BaseModel]] = {
 class ProjectConfig(BaseModel):
     """单个被监控项目配置。"""
 
+    model_config = ConfigDict(hide_input_in_errors=True)
+
     name: str
     metric_profile: str = "java"
     enabled: bool = True
@@ -119,8 +121,9 @@ class ProjectConfig(BaseModel):
                     DatasourceConfig, model.model_validate(raw_config)
                 )
             except ValidationError as exc:
+                errors = exc.errors(include_input=False)
                 raise ValueError(
-                    f"invalid {datasource_name} datasource config: {exc}"
+                    f"invalid {datasource_name} datasource config: {errors}"
                 ) from exc
 
         self.datasource_configs = validated_configs

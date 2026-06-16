@@ -1,5 +1,6 @@
 """结构化 JSON 日志：dictConfig + contextvars 注入 trace_id/project_id。"""
 import logging
+import sys
 from contextvars import ContextVar
 
 from pythonjsonlogger import jsonlogger
@@ -30,10 +31,32 @@ class ContextFilter(logging.Filter):
         return True
 
 
+class AIOpsLogHandler(logging.StreamHandler):
+    """本服务安装的日志 handler，避免覆盖测试或宿主进程 handler。"""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.stream = sys.stderr
+        super().emit(record)
+
+
 def setup_logging(log_format: str = "json") -> None:
     """配置根 logger；dev 人类可读，json 结构化。"""
-    handler = logging.StreamHandler()
-    handler.addFilter(ContextFilter())
+    root = logging.getLogger()
+    handler = next(
+        (
+            existing
+            for existing in root.handlers
+            if isinstance(existing, AIOpsLogHandler)
+        ),
+        None,
+    )
+    if handler is None:
+        handler = AIOpsLogHandler()
+        handler.addFilter(ContextFilter())
+        root.addHandler(handler)
+    else:
+        handler.filters.clear()
+        handler.addFilter(ContextFilter())
     fmt: logging.Formatter
     if log_format == "json":
         fmt = jsonlogger.JsonFormatter(
@@ -46,7 +69,4 @@ def setup_logging(log_format: str = "json") -> None:
             "(trace=%(trace_id)s project=%(project_id)s): %(message)s"
         )
     handler.setFormatter(fmt)
-    root = logging.getLogger()
-    root.handlers.clear()
-    root.addHandler(handler)
     root.setLevel(logging.INFO)

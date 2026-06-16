@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 
 import pytest
@@ -44,7 +45,9 @@ class _SlowProvider(_DummyProvider):
 
 
 @pytest.mark.asyncio
-async def test_validate_configured_providers_collects_results_and_closes(monkeypatch):
+async def test_validate_configured_providers_collects_results_warns_and_closes(
+    monkeypatch, caplog
+):
     success_provider = _DummyProvider("p1", "prometheus", result={"connectivity": True})
     failure_provider = _DummyProvider("p1", "loki", error=RuntimeError("secret-token"))
 
@@ -61,6 +64,7 @@ async def test_validate_configured_providers_collects_results_and_closes(monkeyp
         projects={"p1": ProjectConfig(name="P1")},
     )
 
+    caplog.set_level(logging.WARNING, logger="app.providers.health")
     result = await validate_configured_providers(config, timeout_seconds=0.1)
 
     assert result == {
@@ -71,6 +75,12 @@ async def test_validate_configured_providers_collects_results_and_closes(monkeyp
     }
     assert success_provider.closed is True
     assert failure_provider.closed is True
+    warning_text = caplog.text
+    assert "provider startup validation failed" in warning_text
+    assert "project=p1" in warning_text
+    assert "datasource=loki" in warning_text
+    assert "error=RuntimeError" in warning_text
+    assert "secret-token" not in warning_text
 
 
 @pytest.mark.asyncio
@@ -122,8 +132,8 @@ async def test_validate_configured_providers_skips_disabled_projects_and_keeps_e
 
 
 @pytest.mark.asyncio
-async def test_validate_configured_providers_construction_failure_does_not_block_others(
-    monkeypatch,
+async def test_validate_configured_providers_construction_failure_warns_and_does_not_block_others(
+    monkeypatch, caplog
 ):
     def _factory(project_id: str, _project: ProjectConfig):
         if project_id == "broken":
@@ -140,6 +150,7 @@ async def test_validate_configured_providers_construction_failure_does_not_block
         },
     )
 
+    caplog.set_level(logging.WARNING, logger="app.providers.health")
     result = await validate_configured_providers(config)
 
     assert result["good"] == {"prometheus": {"connectivity": True}}
@@ -147,6 +158,84 @@ async def test_validate_configured_providers_construction_failure_does_not_block
         "__error__": {"connectivity": False, "error": "ProviderConfigurationError"}
     }
     assert "secret-password" not in str(result)
+    warning_text = caplog.text
+    assert "provider startup construction failed" in warning_text
+    assert "project=broken" in warning_text
+    assert "error=ProviderConfigurationError" in warning_text
+    assert "secret-password" not in warning_text
+
+
+@pytest.mark.asyncio
+async def test_validate_configured_providers_warns_on_failed_connectivity_result(
+    monkeypatch, caplog
+):
+    provider = _DummyProvider(
+        "p1",
+        "tempo",
+        result={"connectivity": False, "error": "ready check failed secret-token"},
+    )
+
+    monkeypatch.setattr(
+        "app.providers.health.create_project_providers",
+        lambda *_args, **_kwargs: {"tempo": provider},
+    )
+
+    config = ProjectsConfig(
+        default_project="p1",
+        projects={"p1": ProjectConfig(name="P1")},
+    )
+
+    caplog.set_level(logging.WARNING, logger="app.providers.health")
+    result = await validate_configured_providers(config, timeout_seconds=0.1)
+
+    assert result == {
+        "p1": {
+            "tempo": {
+                "connectivity": False,
+                "error": "ready check failed secret-token",
+            }
+        }
+    }
+    warning_text = caplog.text
+    assert "provider startup validation failed" in warning_text
+    assert "project=p1" in warning_text
+    assert "datasource=tempo" in warning_text
+    assert "ready check failed" in warning_text
+    assert "secret-token" not in warning_text
+
+
+@pytest.mark.asyncio
+async def test_validate_configured_providers_warns_on_string_connectivity_failure(
+    monkeypatch, caplog
+):
+    provider = _DummyProvider(
+        "p1",
+        "prometheus",
+        result={"connectivity": "HTTP 500 secret-token"},
+    )
+
+    monkeypatch.setattr(
+        "app.providers.health.create_project_providers",
+        lambda *_args, **_kwargs: {"prometheus": provider},
+    )
+
+    config = ProjectsConfig(
+        default_project="p1",
+        projects={"p1": ProjectConfig(name="P1")},
+    )
+
+    caplog.set_level(logging.WARNING, logger="app.providers.health")
+    result = await validate_configured_providers(config, timeout_seconds=0.1)
+
+    assert result == {
+        "p1": {"prometheus": {"connectivity": "HTTP 500 secret-token"}}
+    }
+    warning_text = caplog.text
+    assert "provider startup validation failed" in warning_text
+    assert "project=p1" in warning_text
+    assert "datasource=prometheus" in warning_text
+    assert "HTTP 500" in warning_text
+    assert "secret-token" not in warning_text
 
 
 @pytest.mark.asyncio
