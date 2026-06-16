@@ -6,14 +6,18 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.core.config import get_settings
+from app.core.projects import reset_projects_config
 
 
 @pytest.fixture(autouse=True)
-def _clear_settings_cache():
+def _clear_settings_cache(monkeypatch):
     """每个测试前后清 lru_cache，防 monkeypatch env 跨测试污染。"""
+    monkeypatch.setenv("STARTUP_PROVIDER_VALIDATION", "false")
     get_settings.cache_clear()
+    reset_projects_config()
     yield
     get_settings.cache_clear()
+    reset_projects_config()
 
 
 @pytest.fixture

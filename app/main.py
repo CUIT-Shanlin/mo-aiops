@@ -10,12 +10,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.health import router as health_router
+from app.api.projects import router as projects_router
 from app.core.config import get_settings
 from app.core.constants import ErrorCode
 from app.core.db import create_engine, make_sessionmaker, ping_db
 from app.core.logging import set_trace_id, setup_logging
+from app.core.projects import load_projects_config
 from app.core.redis import create_redis, ping_redis
 from app.db.migrate import run_upgrade_head
+from app.providers.health import validate_configured_providers
 from app.schemas.response import APIError
 
 
@@ -38,6 +41,13 @@ async def lifespan(app: FastAPI):
         log.warning("database ping failed at startup")
     if not await ping_redis(app.state.redis):
         log.warning("redis ping failed at startup")
+
+    app.state.projects_config = load_projects_config()
+    app.state.provider_health = {}
+    if settings.startup_provider_validation:
+        app.state.provider_health = await validate_configured_providers(
+            app.state.projects_config
+        )
 
     yield
 
@@ -103,6 +113,7 @@ def get_app() -> FastAPI:
         )
 
     app.include_router(health_router)
+    app.include_router(projects_router)
     return app
 
 
