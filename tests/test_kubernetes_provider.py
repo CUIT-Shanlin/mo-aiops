@@ -536,3 +536,93 @@ async def test_close_clears_cached_apis_and_recreates_them_after_reopen(monkeypa
     assert provider._version_api is not first_version_api
     assert len(captured["api_client_ids"]) == 2
     assert len(set(captured["api_client_ids"])) == 2
+
+
+@pytest.mark.asyncio
+async def test_close_preserves_injected_version_api(monkeypatch):
+    class InjectedVersionApi:
+        def __init__(self):
+            self.calls = 0
+
+        async def get_code(self):
+            self.calls += 1
+            return {"gitVersion": "v1.30.6"}
+
+    injected_version_api = InjectedVersionApi()
+    created = {"api_client": 0, "version_api": 0}
+
+    class FailingApiClient:
+        def __init__(self, configuration=None):
+            created["api_client"] += 1
+
+    class FailingVersionApi:
+        def __init__(self, api_client):
+            created["version_api"] += 1
+
+        async def get_code(self):
+            raise AssertionError("should not be constructed")
+
+    monkeypatch.setattr("app.providers.kubernetes.client.ApiClient", FailingApiClient)
+    monkeypatch.setattr("app.providers.kubernetes.client.VersionApi", FailingVersionApi)
+
+    provider = KubernetesProvider(
+        project_id="proj-a",
+        datasource_type="kubernetes",
+        config=KubernetesDatasourceConfig(mode=KubernetesMode.TOKEN, api_server="https://k8s.example"),
+        version_api=injected_version_api,
+    )
+
+    first = await provider.query(command_type="version")
+    await provider.close()
+    second = await provider.query(command_type="version")
+
+    assert first == {"gitVersion": "v1.30.6"}
+    assert second == {"gitVersion": "v1.30.6"}
+    assert injected_version_api.calls == 2
+    assert created["api_client"] == 0
+    assert created["version_api"] == 0
+
+
+@pytest.mark.asyncio
+async def test_close_preserves_injected_core_v1_api(monkeypatch):
+    class InjectedCoreV1Api:
+        def __init__(self):
+            self.calls = []
+
+        async def list_node(self):
+            self.calls.append("list_node")
+            return {"items": ["node-a"]}
+
+    injected_core_v1_api = InjectedCoreV1Api()
+    created = {"api_client": 0, "core_v1_api": 0}
+
+    class FailingApiClient:
+        def __init__(self, configuration=None):
+            created["api_client"] += 1
+
+    class FailingCoreV1Api:
+        def __init__(self, api_client):
+            created["core_v1_api"] += 1
+
+        async def list_node(self):
+            raise AssertionError("should not be constructed")
+
+    monkeypatch.setattr("app.providers.kubernetes.client.ApiClient", FailingApiClient)
+    monkeypatch.setattr("app.providers.kubernetes.client.CoreV1Api", FailingCoreV1Api)
+
+    provider = KubernetesProvider(
+        project_id="proj-a",
+        datasource_type="kubernetes",
+        config=KubernetesDatasourceConfig(mode=KubernetesMode.TOKEN, api_server="https://k8s.example"),
+        core_v1_api=injected_core_v1_api,
+    )
+
+    first = await provider.query(command_type="list_nodes")
+    await provider.close()
+    second = await provider.query(command_type="list_nodes")
+
+    assert first == {"items": ["node-a"]}
+    assert second == {"items": ["node-a"]}
+    assert injected_core_v1_api.calls == ["list_node", "list_node"]
+    assert created["api_client"] == 0
+    assert created["core_v1_api"] == 0
