@@ -49,15 +49,15 @@ class KubernetesProvider(BaseProvider[KubernetesDatasourceConfig]):
     async def _query(self, **kwargs: Any) -> Any:
         command_type = kwargs.pop("command_type", None)
         if command_type == "version":
-            return await self._get_version_api().get_code()
+            return await (await self._get_version_api()).get_code()
         if command_type == "list_pods":
             namespace = kwargs.pop("namespace", None)
-            core_v1_api = self._get_core_v1_api()
+            core_v1_api = await self._get_core_v1_api()
             if namespace:
                 return await core_v1_api.list_namespaced_pod(namespace)
             return await core_v1_api.list_pod_for_all_namespaces()
         if command_type == "list_nodes":
-            return await self._get_core_v1_api().list_node()
+            return await (await self._get_core_v1_api()).list_node()
         raise ProviderError(f"unsupported kubernetes command_type: {command_type}")
 
     async def validate_scopes(self) -> dict[str, bool | str]:
@@ -69,7 +69,7 @@ class KubernetesProvider(BaseProvider[KubernetesDatasourceConfig]):
         except Exception as exc:
             return _connectivity_summary(exc)
 
-    async def _get_api_client(self) -> ApiClient:
+    async def _get_api_client(self) -> Any:
         if self._api_client is not None:
             return self._api_client
 
@@ -92,17 +92,14 @@ class KubernetesProvider(BaseProvider[KubernetesDatasourceConfig]):
         self._owns_api_client = True
         return self._api_client
 
-    def _get_version_api(self) -> Any:
+    async def _get_version_api(self) -> Any:
         if self._version_api is None:
-            self._version_api = client.VersionApi(self._api_client_or_create())
+            api_client = await self._get_api_client()
+            self._version_api = client.VersionApi(api_client)
         return self._version_api
 
-    def _get_core_v1_api(self) -> Any:
+    async def _get_core_v1_api(self) -> Any:
         if self._core_v1_api is None:
-            self._core_v1_api = client.CoreV1Api(self._api_client_or_create())
+            api_client = await self._get_api_client()
+            self._core_v1_api = client.CoreV1Api(api_client)
         return self._core_v1_api
-
-    def _api_client_or_create(self) -> ApiClient:
-        if self._api_client is None:
-            raise RuntimeError("api client not initialized")
-        return self._api_client

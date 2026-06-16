@@ -197,6 +197,94 @@ async def test_token_mode_get_api_client_sets_configuration(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_query_version_creates_version_api_from_owned_api_client(monkeypatch):
+    captured = {}
+
+    class FakeConfiguration:
+        def __init__(self, host=None):
+            self.host = host
+            self.verify_ssl = None
+            self.api_key = {}
+            self.api_key_prefix = {}
+
+    class FakeVersionApi:
+        def __init__(self, api_client):
+            captured["api_client"] = api_client
+
+        async def get_code(self):
+            return {"gitVersion": "v1.30.1"}
+
+    def fake_api_client(configuration=None):
+        captured["configuration"] = configuration
+        return FakeApiClient()
+
+    monkeypatch.setattr("app.providers.kubernetes.client.Configuration", FakeConfiguration)
+    monkeypatch.setattr("app.providers.kubernetes.client.ApiClient", fake_api_client)
+    monkeypatch.setattr("app.providers.kubernetes.client.VersionApi", FakeVersionApi)
+
+    provider = KubernetesProvider(
+        project_id="proj-a",
+        datasource_type="kubernetes",
+        config=KubernetesDatasourceConfig(
+            mode=KubernetesMode.TOKEN,
+            api_server="https://k8s.example",
+            token="secret-token",
+        ),
+    )
+
+    result = await provider.query(command_type="version")
+
+    assert result == {"gitVersion": "v1.30.1"}
+    assert isinstance(captured["api_client"], FakeApiClient)
+    assert captured["configuration"].host == "https://k8s.example"
+    assert provider._api_client is captured["api_client"]
+
+
+@pytest.mark.asyncio
+async def test_query_list_nodes_creates_core_v1_api_from_owned_api_client(monkeypatch):
+    captured = {}
+
+    class FakeConfiguration:
+        def __init__(self, host=None):
+            self.host = host
+            self.verify_ssl = None
+            self.api_key = {}
+            self.api_key_prefix = {}
+
+    class FakeCoreV1Api:
+        def __init__(self, api_client):
+            captured["api_client"] = api_client
+
+        async def list_node(self):
+            return {"items": ["node-a"]}
+
+    def fake_api_client(configuration=None):
+        captured["configuration"] = configuration
+        return FakeApiClient()
+
+    monkeypatch.setattr("app.providers.kubernetes.client.Configuration", FakeConfiguration)
+    monkeypatch.setattr("app.providers.kubernetes.client.ApiClient", fake_api_client)
+    monkeypatch.setattr("app.providers.kubernetes.client.CoreV1Api", FakeCoreV1Api)
+
+    provider = KubernetesProvider(
+        project_id="proj-a",
+        datasource_type="kubernetes",
+        config=KubernetesDatasourceConfig(
+            mode=KubernetesMode.TOKEN,
+            api_server="https://k8s.example",
+            token="secret-token",
+        ),
+    )
+
+    result = await provider.query(command_type="list_nodes")
+
+    assert result == {"items": ["node-a"]}
+    assert isinstance(captured["api_client"], FakeApiClient)
+    assert captured["configuration"].host == "https://k8s.example"
+    assert provider._api_client is captured["api_client"]
+
+
+@pytest.mark.asyncio
 async def test_close_closes_owned_api_client():
     provider = KubernetesProvider(
         project_id="proj-a",
