@@ -104,6 +104,25 @@ def test_invalid_json_output_raises_structured_output_error():
         )
 
 
+def test_model_runtime_error_is_redacted_and_chain_is_dropped():
+    class BrokenModel:
+        async def ainvoke(self, messages):
+            raise RuntimeError("secret prompt/api-key")
+
+    client = LLMClient(BrokenModel(), max_retries=1)
+
+    with pytest.raises(LLMStructuredOutputError) as exc_info:
+        asyncio.run(
+            client.ainvoke_structured(
+                [{"role": "user", "content": "restart"}], ActionSchema
+            )
+        )
+
+    assert str(exc_info.value) == "LLM structured output validation failed"
+    assert "secret prompt/api-key" not in str(exc_info.value)
+    assert exc_info.value.__cause__ is None
+
+
 def test_not_implemented_structured_output_falls_back_to_json():
     class FakeJsonModel:
         def __init__(self):
@@ -130,6 +149,38 @@ def test_not_implemented_structured_output_falls_back_to_json():
 
     assert result == ActionSchema(action="restart", confidence=0.8)
     assert model.calls == 1
+
+
+def test_structured_failure_falls_back_to_raw_json_result():
+    class FakeStructuredModel:
+        async def ainvoke(self, messages):
+            return {"action": "restart"}
+
+    class FakeModel:
+        def __init__(self):
+            self.fallback_calls = 0
+
+        def with_structured_output(self, schema):
+            return FakeStructuredModel()
+
+        async def ainvoke(self, messages):
+            self.fallback_calls += 1
+            return type(
+                "FakeMessage",
+                (),
+                {"content": '{"action":"restart","confidence":0.8}'},
+            )()
+
+    model = FakeModel()
+    client = LLMClient(model, max_retries=1)
+    result = asyncio.run(
+        client.ainvoke_structured(
+            [{"role": "user", "content": "restart"}], ActionSchema
+        )
+    )
+
+    assert result == ActionSchema(action="restart", confidence=0.8)
+    assert model.fallback_calls == 1
 
 
 def test_timeout_raises_structured_output_error():

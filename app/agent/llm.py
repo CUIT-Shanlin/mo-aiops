@@ -68,8 +68,6 @@ class LLMClient:
         messages: list[dict[str, str]],
         schema: type[BaseModel],
     ) -> BaseModel:
-        last_error: Exception | None = None
-
         for attempt in range(self.max_retries):
             try:
                 result = await asyncio.wait_for(
@@ -77,14 +75,11 @@ class LLMClient:
                     timeout=self.timeout_seconds,
                 )
                 return result
-            except Exception as exc:  # noqa: BLE001
-                last_error = exc
+            except Exception:  # noqa: BLE001
                 if attempt < self.max_retries - 1:
                     await asyncio.sleep(0.2 * (2**attempt))
 
-        raise LLMStructuredOutputError(
-            "LLM structured output validation failed"
-        ) from last_error
+        raise LLMStructuredOutputError("LLM structured output validation failed") from None
 
     async def _ainvoke_structured_once(
         self,
