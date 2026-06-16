@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 class DummyConfig(BaseModel):
     token: str = "secret-token"
+    password: str = "secret-password"
 
 
 class QueryOnlyProvider(BaseProvider[DummyConfig]):
@@ -28,6 +29,11 @@ class SlowProvider(BaseProvider[DummyConfig]):
 class ErrorProvider(BaseProvider[DummyConfig]):
     async def _query(self, **kwargs):
         raise ValueError("boom")
+
+
+class ProviderErrorProvider(BaseProvider[DummyConfig]):
+    async def _query(self, **kwargs):
+        raise ProviderError("provider rejected request")
 
 
 class SecretErrorProvider(BaseProvider[DummyConfig]):
@@ -112,7 +118,7 @@ async def test_unknown_error_is_wrapped_and_duration_recorded():
     provider = ErrorProvider(
         project_id="proj-a",
         datasource_type="prometheus",
-        config=DummyConfig(token="top-secret"),
+        config=DummyConfig(token="top-secret", password="super-secret"),
     )
 
     with pytest.raises(ProviderError) as excinfo:
@@ -121,7 +127,7 @@ async def test_unknown_error_is_wrapped_and_duration_recorded():
     assert "provider call failed" in str(excinfo.value)
     assert "ValueError" in str(excinfo.value)
     assert "boom" not in str(excinfo.value)
-    assert isinstance(excinfo.value.__cause__, ValueError)
+    assert excinfo.value.__cause__ is None
     assert provider.last_duration_ms is not None
 
 
@@ -140,6 +146,21 @@ async def test_unknown_error_redacts_secret_text_from_message():
     assert "top-secret" not in message
     assert "super-secret" not in message
     assert "RuntimeError" in message or "provider call failed" in message
+
+
+@pytest.mark.asyncio
+async def test_provider_error_is_passed_through_and_duration_recorded():
+    provider = ProviderErrorProvider(
+        project_id="proj-a",
+        datasource_type="prometheus",
+        config=DummyConfig(),
+    )
+
+    with pytest.raises(ProviderError, match="provider rejected request") as excinfo:
+        await provider.query()
+
+    assert excinfo.value.__cause__ is None
+    assert provider.last_duration_ms is not None
 
 
 @pytest.mark.asyncio
