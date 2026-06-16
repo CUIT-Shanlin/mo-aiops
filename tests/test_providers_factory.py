@@ -2,7 +2,7 @@ from pydantic import BaseModel
 import pytest
 
 from app.core.projects import ProjectConfig, PrometheusDatasourceConfig
-from app.providers.base import BaseProvider, ProviderConfigurationError
+from app.providers.base import ProviderConfigurationError
 from app.providers.factory import (
     create_project_providers,
     create_provider,

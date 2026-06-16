@@ -6,7 +6,7 @@ import os
 import re
 from enum import Enum
 from pathlib import Path
-from typing import Any, Iterator, TypeAlias
+from typing import Any, Iterator, TypeAlias, cast
 
 import yaml
 from pydantic import BaseModel, Field, ValidationError, model_validator
@@ -115,7 +115,9 @@ class ProjectConfig(BaseModel):
             if model is None:
                 continue
             try:
-                validated_configs[datasource_name] = model.model_validate(raw_config)
+                validated_configs[datasource_name] = cast(
+                    DatasourceConfig, model.model_validate(raw_config)
+                )
             except ValidationError as exc:
                 raise ValueError(
                     f"invalid {datasource_name} datasource config: {exc}"

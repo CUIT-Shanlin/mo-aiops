@@ -8,12 +8,16 @@ from pydantic import BaseModel, ValidationError
 
 from app.core.config import Settings, get_settings
 
+ChatOpenAI: Any
+_chat_openai_import_error: Exception | None
+
 try:
-    from langchain_openai import ChatOpenAI
+    from langchain_openai import ChatOpenAI as _ImportedChatOpenAI
 except Exception as exc:  # pragma: no cover - import-time dependency guard
-    ChatOpenAI = None  # type: ignore[assignment]
+    ChatOpenAI = None
     _chat_openai_import_error = exc
 else:  # pragma: no cover - import-time dependency guard
+    ChatOpenAI = _ImportedChatOpenAI
     _chat_openai_import_error = None
 
 
