@@ -1,7 +1,12 @@
 import pytest
 
-from app.metrics_profile import get_profile, list_profiles
-from app.metrics_profile.base import UnknownMetricError, UnknownProfileError
+from app.metrics_profile import get_profile, list_profiles, register_profile
+from app.metrics_profile.base import (
+    MetricProfile,
+    DuplicateProfileError,
+    UnknownMetricError,
+    UnknownProfileError,
+)
 
 
 def test_java_profile_auto_registered():
@@ -50,3 +55,28 @@ def test_java_profile_covers_expected_metrics():
         "sys.memory",
         "sys.network",
     ]
+
+
+def test_register_profile_adds_profile_to_registry():
+    profile = MetricProfile(name="python", mappings={"sys.cpu": "python_cpu_usage"})
+
+    register_profile(profile)
+
+    assert "python" in list_profiles()
+    assert get_profile("python") is profile
+
+
+def test_register_profile_rejects_duplicate_name():
+    profile = MetricProfile(name="duplicate", mappings={"sys.cpu": "cpu_metric"})
+    register_profile(profile)
+
+    with pytest.raises(DuplicateProfileError, match="duplicate metric profile"):
+        register_profile(MetricProfile(name="duplicate", mappings={"sys.cpu": "other"}))
+
+
+def test_register_profile_rejects_same_object_reregistration():
+    profile = MetricProfile(name="same-object", mappings={"sys.cpu": "cpu_metric"})
+    register_profile(profile)
+
+    with pytest.raises(DuplicateProfileError, match="duplicate metric profile"):
+        register_profile(profile)

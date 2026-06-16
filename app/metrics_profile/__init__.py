@@ -1,4 +1,5 @@
 from app.metrics_profile.base import (
+    DuplicateProfileError,
     MetricProfile,
     MetricProfileError,
     UnknownMetricError,
@@ -11,6 +12,7 @@ from app.metrics_profile import java as _java  # noqa: F401
 __all__ = [
     "MetricProfile",
     "MetricProfileError",
+    "DuplicateProfileError",
     "UnknownMetricError",
     "UnknownProfileError",
     "get_profile",

@@ -10,7 +10,7 @@ JAVA_PROFILE = MetricProfile(
             "sum(netty_connections_active_total)"
         ),
         "msg.throughput": (
-            "sum(rate(jvm_gc_pause_seconds_count[5m]))"
+            "rate(messages_sent_total[1m])"
         ),
         "msg.p99_latency": (
             "histogram_quantile(0.99, sum(rate(http_server_requests_seconds_bucket[5m])) by (le))"

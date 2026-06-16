@@ -16,6 +16,10 @@ class UnknownMetricError(MetricProfileError):
     pass
 
 
+class DuplicateProfileError(MetricProfileError):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class MetricProfile:
     name: str
