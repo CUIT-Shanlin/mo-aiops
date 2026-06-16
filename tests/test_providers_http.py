@@ -98,7 +98,9 @@ async def test_prometheus_basic_auth_is_used_when_credentials_exist():
 
     await provider.query(query_type="instant", query="up")
 
-    assert session.calls[0][1]["auth"] is not None
+    request_kwargs = session.calls[0][1]
+    assert "auth" not in request_kwargs
+    assert request_kwargs["headers"]["Authorization"].startswith("Basic ")
 
 
 @pytest.mark.asyncio
@@ -115,6 +117,22 @@ async def test_prometheus_validate_scopes_hits_healthy_endpoint():
 
     assert result == {"connectivity": True}
     assert session.calls == [("http://prom:9090/-/healthy", {"ssl": True})]
+
+
+@pytest.mark.asyncio
+async def test_prometheus_validate_scopes_redacts_body_on_failure():
+    session = FakeSession(FakeResponse(status=500, text_value="secret-token leaked"))
+    provider = PrometheusProvider(
+        project_id="proj-a",
+        datasource_type="prometheus",
+        config=PrometheusDatasourceConfig(base_url="http://prom:9090"),
+        session=session,
+    )
+
+    result = await provider.validate_scopes()
+
+    assert result["connectivity"] == "HTTP 500"
+    assert "secret-token" not in result["connectivity"]
 
 
 @pytest.mark.asyncio
@@ -224,8 +242,9 @@ async def test_loki_no_auth_does_not_set_auth_or_orgid_header():
 
     await provider.query(query='{job="app"}')
 
-    assert "auth" not in session.calls[0][1]
-    assert "headers" not in session.calls[0][1]
+    request_kwargs = session.calls[0][1]
+    assert "auth" not in request_kwargs
+    assert "headers" not in request_kwargs
 
 
 @pytest.mark.asyncio
@@ -244,6 +263,22 @@ async def test_loki_validate_scopes_hits_buildinfo_endpoint():
     assert session.calls == [
         ("http://loki:3100/loki/api/v1/status/buildinfo", {"ssl": True})
     ]
+
+
+@pytest.mark.asyncio
+async def test_loki_validate_scopes_redacts_body_on_failure():
+    session = FakeSession(FakeResponse(status=500, text_value="secret-token leaked"))
+    provider = LokiProvider(
+        project_id="proj-a",
+        datasource_type="loki",
+        config=LokiDatasourceConfig(base_url="http://loki:3100"),
+        session=session,
+    )
+
+    result = await provider.validate_scopes()
+
+    assert result["connectivity"] == "HTTP 500"
+    assert "secret-token" not in result["connectivity"]
 
 
 @pytest.mark.asyncio
@@ -292,8 +327,9 @@ async def test_loki_basic_auth_is_used_when_credentials_exist():
 
     await provider.query(query="sum(rate({job='app'}[5m]))")
 
-    auth = session.calls[0][1]["auth"]
-    assert auth is not None
+    request_kwargs = session.calls[0][1]
+    assert "auth" not in request_kwargs
+    assert request_kwargs["headers"]["Authorization"].startswith("Basic ")
 
 
 @pytest.mark.asyncio
@@ -327,7 +363,9 @@ async def test_tempo_basic_auth_is_used_when_credentials_exist():
 
     await provider.query(query_type="trace", trace_id="abc")
 
-    assert session.calls[0][1]["auth"] is not None
+    request_kwargs = session.calls[0][1]
+    assert "auth" not in request_kwargs
+    assert request_kwargs["headers"]["Authorization"].startswith("Basic ")
 
 
 @pytest.mark.asyncio
@@ -441,6 +479,27 @@ async def test_tempo_validate_scopes_falls_back_to_search_on_ready_failure():
         ("http://tempo:3200/ready", {"ssl": True}),
         ("http://tempo:3200/api/search", {"ssl": True}),
     ]
+
+
+@pytest.mark.asyncio
+async def test_tempo_validate_scopes_redacts_body_on_fallback_failure():
+    session = SequentialResponseSession(
+        [
+            FakeResponse(status=503, text_value="secret-token ready failure"),
+            FakeResponse(status=500, text_value="secret-token search failure"),
+        ]
+    )
+    provider = TempoProvider(
+        project_id="proj-a",
+        datasource_type="tempo",
+        config=TempoDatasourceConfig(base_url="http://tempo:3200"),
+        session=session,
+    )
+
+    result = await provider.validate_scopes()
+
+    assert result["connectivity"] == "HTTP 500"
+    assert "secret-token" not in result["connectivity"]
 
 
 @pytest.mark.asyncio

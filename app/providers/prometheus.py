@@ -9,6 +9,13 @@ from app.core.projects import PrometheusDatasourceConfig
 from app.providers.base import BaseProvider, ProviderError
 
 
+def _connectivity_summary(exc: Exception) -> str:
+    message = str(exc)
+    if message.startswith("HTTP "):
+        return message.split(" calling ", 1)[0]
+    return exc.__class__.__name__
+
+
 class PrometheusProvider(BaseProvider[PrometheusDatasourceConfig]):
     CONFIG_CLASS = PrometheusDatasourceConfig
 
@@ -52,7 +59,7 @@ class PrometheusProvider(BaseProvider[PrometheusDatasourceConfig]):
             await self._request("/-/healthy", parse_json=False)
             return {"connectivity": True}
         except ProviderError as exc:
-            return {"connectivity": str(exc)}
+            return {"connectivity": _connectivity_summary(exc)}
 
     async def _request(
         self,
@@ -67,10 +74,12 @@ class PrometheusProvider(BaseProvider[PrometheusDatasourceConfig]):
         if request_params:
             request_kwargs["params"] = request_params
         if self.config.username and self.config.password:
-            request_kwargs["auth"] = aiohttp.BasicAuth(
-                self.config.username,
-                self.config.password,
-            )
+            request_kwargs["headers"] = {
+                "Authorization": aiohttp.encode_basic_auth(
+                    self.config.username,
+                    self.config.password,
+                )
+            }
 
         url = urljoin(self.config.base_url.rstrip("/") + "/", path.lstrip("/"))
         async with session.get(url, **request_kwargs) as response:

@@ -9,6 +9,13 @@ from app.core.projects import LokiAuthType, LokiDatasourceConfig
 from app.providers.base import BaseProvider, ProviderError
 
 
+def _connectivity_summary(exc: Exception) -> str:
+    message = str(exc)
+    if message.startswith("HTTP "):
+        return message.split(" calling ", 1)[0]
+    return exc.__class__.__name__
+
+
 class LokiProvider(BaseProvider[LokiDatasourceConfig]):
     CONFIG_CLASS = LokiDatasourceConfig
 
@@ -49,7 +56,7 @@ class LokiProvider(BaseProvider[LokiDatasourceConfig]):
             await self._request("/loki/api/v1/status/buildinfo", parse_json=False)
             return {"connectivity": True}
         except ProviderError as exc:
-            return {"connectivity": str(exc)}
+            return {"connectivity": _connectivity_summary(exc)}
 
     async def _request(
         self,
@@ -63,15 +70,19 @@ class LokiProvider(BaseProvider[LokiDatasourceConfig]):
         request_params = {k: v for k, v in (params or {}).items() if v is not None}
         if request_params:
             request_kwargs["params"] = request_params
+        headers: dict[str, str] = {}
         if self.config.auth_type is LokiAuthType.BASIC:
             if self.config.username and self.config.password:
-                request_kwargs["auth"] = aiohttp.BasicAuth(
+                headers["Authorization"] = aiohttp.encode_basic_auth(
                     self.config.username,
                     self.config.password,
                 )
         elif self.config.auth_type is LokiAuthType.X_SCOPE_ORG_ID:
             if self.config.tenant_id:
-                request_kwargs["headers"] = {"X-Scope-OrgID": self.config.tenant_id}
+                headers["X-Scope-OrgID"] = self.config.tenant_id
+
+        if headers:
+            request_kwargs["headers"] = headers
 
         url = urljoin(self.config.base_url.rstrip("/") + "/", path.lstrip("/"))
         async with session.get(url, **request_kwargs) as response:
