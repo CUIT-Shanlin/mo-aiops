@@ -69,8 +69,8 @@ class BaseProvider(Generic[ConfigT]):
             raise
         except Exception as exc:
             raise ProviderError(
-                f"provider {action} failed: project={self.project_id} "
-                f"datasource={self.datasource_type}: {exc}"
+                f"provider call failed: action={action} project={self.project_id} "
+                f"datasource={self.datasource_type}: {exc.__class__.__name__}"
             ) from exc
         finally:
             self.last_duration_ms = (time.perf_counter() - start) * 1000

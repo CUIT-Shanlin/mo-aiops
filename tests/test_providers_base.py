@@ -30,6 +30,11 @@ class ErrorProvider(BaseProvider[DummyConfig]):
         raise ValueError("boom")
 
 
+class SecretErrorProvider(BaseProvider[DummyConfig]):
+    async def _query(self, **kwargs):
+        raise RuntimeError("boom top-secret")
+
+
 class NotifyErrorProvider(BaseProvider[DummyConfig]):
     async def _notify(self, **kwargs):
         raise RuntimeError("notify failed")
@@ -110,10 +115,31 @@ async def test_unknown_error_is_wrapped_and_duration_recorded():
         config=DummyConfig(token="top-secret"),
     )
 
-    with pytest.raises(ProviderError, match="boom"):
+    with pytest.raises(ProviderError) as excinfo:
         await provider.query()
 
+    assert "provider call failed" in str(excinfo.value)
+    assert "ValueError" in str(excinfo.value)
+    assert "boom" not in str(excinfo.value)
+    assert isinstance(excinfo.value.__cause__, ValueError)
     assert provider.last_duration_ms is not None
+
+
+@pytest.mark.asyncio
+async def test_unknown_error_redacts_secret_text_from_message():
+    provider = SecretErrorProvider(
+        project_id="proj-a",
+        datasource_type="prometheus",
+        config=DummyConfig(token="top-secret", password="super-secret"),
+    )
+
+    with pytest.raises(ProviderError) as excinfo:
+        await provider.query()
+
+    message = str(excinfo.value)
+    assert "top-secret" not in message
+    assert "super-secret" not in message
+    assert "RuntimeError" in message or "provider call failed" in message
 
 
 @pytest.mark.asyncio
@@ -124,6 +150,9 @@ async def test_notify_error_is_wrapped():
         config=DummyConfig(),
     )
 
-    with pytest.raises(ProviderError, match="notify failed"):
+    with pytest.raises(ProviderError) as excinfo:
         await provider.notify()
 
+    assert "provider call failed" in str(excinfo.value)
+    assert "RuntimeError" in str(excinfo.value)
+    assert "notify failed" not in str(excinfo.value)
