@@ -14,17 +14,21 @@ from app.api.agent import router as agent_router
 from app.api.audit import router as audit_router
 from app.api.alerts import router as alerts_router
 from app.api.auth import router as auth_router
+from app.api.dashboard import router as dashboard_router
 from app.api.exports import router as exports_router
 from app.api.healing import router as healing_router
 from app.api.health import router as health_router
 from app.api.k8s import router as k8s_router
 from app.api.logs import router as logs_router
+from app.api.metrics import router as metrics_router
 from app.api.notifications import router as notifications_router
 from app.api.projects import router as projects_router
 from app.api.rca import router as rca_router
 from app.api.seeds import router as seeds_router
 from app.api.settings import router as settings_router
 from app.api.topology import router as topology_router
+from app.api.traces import router as traces_router
+from app.api.users import router as users_router
 from app.alerts.ingest import IngestConsumer
 from app.collectors.scheduler import CollectorScheduler
 from app.collectors.windows import MetricWindowStore, TraceCache
@@ -198,6 +202,10 @@ def get_app() -> FastAPI:
     app.include_router(topology_router)
     app.include_router(notifications_router)
     app.include_router(logs_router)
+    app.include_router(dashboard_router)
+    app.include_router(metrics_router)
+    app.include_router(traces_router)
+    app.include_router(users_router)
     app.include_router(k8s_router)
     app.include_router(settings_router)
     app.include_router(alerts_ws_router)

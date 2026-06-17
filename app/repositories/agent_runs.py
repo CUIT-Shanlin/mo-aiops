@@ -103,6 +103,15 @@ class AgentRunRepository(ProjectScopedRepository):
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
+    async def latest_completed(self) -> AgentRun | None:
+        stmt = (
+            self.scope(select(AgentRun).where(AgentRun.status == "completed"))
+            .order_by(AgentRun.finished_at.desc().nullslast(), AgentRun.created_at.desc())
+            .limit(1)
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def finish(
         self,
         run_id: int,
