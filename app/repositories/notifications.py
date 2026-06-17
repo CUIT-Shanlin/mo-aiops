@@ -105,3 +105,13 @@ class NotificationRepository(ProjectScopedRepository):
         row.read = True
         await self.session.flush()
         return row
+
+    async def mark_all_read(self) -> int:
+        result = await self.session.execute(
+            self.scope(select(Notification).where(Notification.read.is_(False)))
+        )
+        rows = list(result.scalars().all())
+        for row in rows:
+            row.read = True
+        await self.session.flush()
+        return len(rows)

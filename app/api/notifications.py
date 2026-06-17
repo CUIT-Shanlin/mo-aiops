@@ -43,6 +43,37 @@ async def mark_notification_read(
     _current_user: Annotated[CurrentUser, Depends(get_current_user)],
     project_id: Annotated[str, Depends(require_project_id)],
 ) -> dict[str, Any]:
+    return await _mark_notification_read(notification_id, request, project_id)
+
+
+@router.put("/api/v1/notifications/read-all")
+async def mark_all_notifications_read(
+    request: Request,
+    _current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    project_id: Annotated[str, Depends(require_project_id)],
+) -> dict[str, Any]:
+    async with request.app.state.sessionmaker() as session:
+        service = NotificationService(NotificationRepository(session, project_id))
+        await service.mark_all_read()
+        await session.commit()
+    return success({"success": True})
+
+
+@router.put("/api/v1/notifications/{notification_id}/read")
+async def mark_notification_read_put(
+    notification_id: int,
+    request: Request,
+    _current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    project_id: Annotated[str, Depends(require_project_id)],
+) -> dict[str, Any]:
+    return await _mark_notification_read(notification_id, request, project_id)
+
+
+async def _mark_notification_read(
+    notification_id: int,
+    request: Request,
+    project_id: str,
+) -> dict[str, Any]:
     async with request.app.state.sessionmaker() as session:
         service = NotificationService(NotificationRepository(session, project_id))
         try:

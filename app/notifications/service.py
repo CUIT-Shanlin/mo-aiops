@@ -21,3 +21,6 @@ class NotificationService:
         if row is None:
             raise LookupError(notification_id)
         return row
+
+    async def mark_all_read(self) -> int:
+        return await self.repository.mark_all_read()

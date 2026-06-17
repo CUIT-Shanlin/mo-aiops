@@ -3,8 +3,10 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy import select, text
 
+from app.core.constants import RedisKey
 from app.core.projects import ProjectConfig, ProjectsConfig
 from app.models.audit_log import AuditLog
+from app.repositories.agent_runs import AgentRunCreate, AgentRunRepository
 from app.repositories.alerts import AlertEventCreate, AlertEventRepository
 from app.repositories.audit import AuditLogRepository
 
@@ -14,7 +16,7 @@ async def _clean_alerts_api_tables(app_instance):
     async with app_instance.state.sessionmaker() as session:
         await session.execute(
             text(
-                "TRUNCATE notifications, audit_logs, heal_actions, alert_events "
+                "TRUNCATE notifications, audit_logs, heal_actions, agent_runs, alert_events "
                 "RESTART IDENTITY"
             )
         )
@@ -23,7 +25,7 @@ async def _clean_alerts_api_tables(app_instance):
     async with app_instance.state.sessionmaker() as session:
         await session.execute(
             text(
-                "TRUNCATE notifications, audit_logs, heal_actions, alert_events "
+                "TRUNCATE notifications, audit_logs, heal_actions, agent_runs, alert_events "
                 "RESTART IDENTITY"
             )
         )
@@ -467,3 +469,58 @@ async def test_alerts_project_header_rejects_disabled_project(
 
     assert response.status_code == 200
     assert response.json() == {"code": 40004, "message": "项目不存在", "data": None}
+
+
+async def test_alert_detail_rca_id_and_logs_are_project_scoped(
+    app_instance,
+    client,
+    auth_headers,
+    alerts_projects_config,
+):
+    async with app_instance.state.sessionmaker() as session:
+        run = await AgentRunRepository(session, "prod").create(
+            AgentRunCreate(
+                trigger_source="manual",
+                status="completed",
+                fault_service="message-service",
+                anomaly_type="HighCPU",
+                confidence=88,
+                root_cause_summary="CPU saturation",
+                evidence_chain={"metrics": ["cpu high"]},
+            )
+        )
+        await session.commit()
+    alert_id = await _seed_alert(
+        app_instance,
+        name="HighCPU",
+        fingerprint="fp-rca",
+        severity="critical",
+        service="message-service",
+        namespace="prod-ns",
+        agent_run_id=run.id,
+    )
+    await app_instance.state.redis.set(
+        RedisKey.of("prod", RedisKey.RECENT_ERRORS),
+        '[{"timestamp":"2026-06-17T10:00:00Z","level":"ERROR",'
+        '"service":"message-service","namespace":"prod-ns","message":"cpu high"},'
+        '{"timestamp":"2026-06-17T10:01:00Z","level":"ERROR",'
+        '"service":"other-service","namespace":"prod-ns","message":"ignore"}]',
+    )
+    await app_instance.state.redis.set(
+        RedisKey.of("stage", RedisKey.RECENT_ERRORS),
+        '[{"timestamp":"2026-06-17T10:02:00Z","level":"ERROR",'
+        '"service":"message-service","namespace":"prod-ns","message":"stage leak"}]',
+    )
+
+    rca = await client.get(f"/api/v1/alerts/{alert_id}/rca-id", headers=auth_headers)
+    logs = await client.get(f"/api/v1/alerts/{alert_id}/logs", headers=auth_headers)
+
+    assert rca.status_code == 200
+    assert rca.json()["data"] == {
+        "rcaId": run.id,
+        "summary": "CPU saturation",
+        "confidenceScore": 88.0,
+    }
+    assert logs.status_code == 200
+    assert logs.json()["data"]["total"] == 1
+    assert logs.json()["data"]["items"][0]["message"] == "cpu high"

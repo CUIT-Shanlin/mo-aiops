@@ -400,6 +400,38 @@ async def test_notification_read_mutates_current_project_only(
     assert stage.read is False
 
 
+async def test_notification_put_read_alias_and_read_all_are_project_scoped(
+    app_instance,
+    client,
+    auth_headers,
+    audit_notifications_projects_config,
+):
+    first_id = await _seed_notification(app_instance, read=False)
+    second_id = await _seed_notification(app_instance, read=False)
+    stage_id = await _seed_notification(app_instance, project_id="stage", read=False)
+
+    alias_response = await client.put(
+        f"/api/v1/notifications/{first_id}/read",
+        headers=auth_headers,
+    )
+    read_all_response = await client.put(
+        "/api/v1/notifications/read-all",
+        headers=auth_headers,
+    )
+
+    assert alias_response.status_code == 200
+    assert alias_response.json() == {"code": 0, "message": "success", "data": {"success": True}}
+    assert read_all_response.status_code == 200
+    assert read_all_response.json() == {"code": 0, "message": "success", "data": {"success": True}}
+    async with app_instance.state.sessionmaker() as session:
+        first = await NotificationRepository(session, "prod").get(first_id)
+        second = await NotificationRepository(session, "prod").get(second_id)
+        stage = await NotificationRepository(session, "stage").get(stage_id)
+    assert first is not None and first.read is True
+    assert second is not None and second.read is True
+    assert stage is not None and stage.read is False
+
+
 async def test_audit_null_project_repository_behavior_still_only_returns_null_rows(
     app_instance,
     audit_notifications_projects_config,

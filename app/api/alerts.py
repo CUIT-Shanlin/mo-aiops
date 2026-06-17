@@ -16,7 +16,9 @@ from app.audit.service import AuditService
 from app.core.constants import ErrorCode
 from app.core.projects import get_projects_config
 from app.core.security import CurrentUser, get_current_user
+from app.logs.service import LogFilters, LogsService
 from app.models.alert_event import AlertEvent
+from app.repositories.agent_runs import AgentRunRepository
 from app.repositories.alerts import AlertEventRepository
 from app.repositories.audit import AuditLogRepository
 from app.schemas.response import APIError, success
@@ -125,6 +127,77 @@ async def list_alerts(
             "page": result.page,
             "pageSize": result.size,
             "items": [_alert_to_dict(alert) for alert in result.items],
+        }
+    )
+
+
+@router.get("/api/v1/alerts/{alert_id}/rca-id")
+async def get_alert_rca_id(
+    alert_id: int,
+    request: Request,
+    _current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    project_id: Annotated[str, Depends(require_project_id)],
+) -> dict[str, Any]:
+    async with request.app.state.sessionmaker() as session:
+        alert = await AlertEventRepository(session, project_id).get(alert_id)
+        if alert is None:
+            raise APIError(ErrorCode.NOT_FOUND, "告警不存在")
+        if alert.agent_run_id is None:
+            return success({"rcaId": None, "summary": None, "confidenceScore": 0})
+
+        run = await AgentRunRepository(session, project_id).get(alert.agent_run_id)
+        if run is None:
+            return success(
+                {
+                    "rcaId": alert.agent_run_id,
+                    "summary": None,
+                    "confidenceScore": 0,
+                }
+            )
+    return success(
+        {
+            "rcaId": run.id,
+            "summary": run.root_cause_summary,
+            "confidenceScore": run.confidence or 0,
+        }
+    )
+
+
+@router.get("/api/v1/alerts/{alert_id}/logs")
+async def get_alert_logs(
+    alert_id: int,
+    request: Request,
+    _current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    project_id: Annotated[str, Depends(require_project_id)],
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=200, alias="pageSize"),
+) -> dict[str, Any]:
+    async with request.app.state.sessionmaker() as session:
+        alert = await AlertEventRepository(session, project_id).get(alert_id)
+    if alert is None:
+        raise APIError(ErrorCode.NOT_FOUND, "告警不存在")
+
+    service = alert.service or _optional_label(alert, "service")
+    namespace = alert.namespace or _optional_label(alert, "namespace")
+    data = await LogsService(request.app.state.redis).search(
+        project_id,
+        LogFilters(service=service),
+        page=1,
+        page_size=10000,
+    )
+    items = data["items"]
+    if namespace:
+        items = [item for item in items if item.get("namespace") == namespace]
+
+    offset = (page - 1) * page_size
+    counts = _log_level_counts(items)
+    return success(
+        {
+            "total": len(items),
+            **counts,
+            "page": page,
+            "pageSize": page_size,
+            "items": items[offset : offset + page_size],
         }
     )
 
@@ -336,6 +409,28 @@ def _alert_to_dict(alert: AlertEvent) -> dict[str, Any]:
         "relatedRCA": alert.agent_run_id,
         "relatedHealing": alert.related_heal_action_id,
     }
+
+
+def _optional_label(alert: AlertEvent, key: str) -> str | None:
+    value = alert.labels.get(key)
+    if isinstance(value, str) and value:
+        return value
+    return None
+
+
+def _log_level_counts(logs: list[dict[str, Any]]) -> dict[str, int]:
+    counts = {"errorCount": 0, "warnCount": 0, "infoCount": 0, "debugCount": 0}
+    for log in logs:
+        level = str(log.get("level", "")).casefold()
+        if level == "error":
+            counts["errorCount"] += 1
+        elif level in {"warn", "warning"}:
+            counts["warnCount"] += 1
+        elif level == "info":
+            counts["infoCount"] += 1
+        elif level == "debug":
+            counts["debugCount"] += 1
+    return counts
 
 
 def _build_groups(alerts: list[AlertEvent]) -> list[dict[str, Any]]:
