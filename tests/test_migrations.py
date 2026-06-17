@@ -18,4 +18,16 @@ async def test_upgrade_runs_without_error():
     async with engine.connect() as conn:
         result = await conn.execute(text("SELECT to_regclass('public.projects')"))
         assert result.scalar() is None
+        result = await conn.execute(text("SELECT to_regclass('public.agent_runs')"))
+        assert result.scalar() == "agent_runs"
+        for table_name in (
+            "alert_events",
+            "heal_actions",
+            "audit_logs",
+            "notifications",
+        ):
+            result = await conn.execute(
+                text(f"SELECT to_regclass('public.{table_name}')")
+            )
+            assert result.scalar() == table_name
     await engine.dispose()
