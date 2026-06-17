@@ -21,6 +21,40 @@ def test_api_docs_mark_m6_export_download_semantics():
     assert "前端携带同一 Bearer token 与 X-Project-Id 下载" in doc
 
 
+def test_api_docs_use_v1_paths_for_final_mvp_parity_routes():
+    doc = Path("docs/AIOps_API_文档.md").read_text()
+    for path in (
+        "POST /api/v1/alerts/webhook",
+        "GET /api/v1/alerts/{alert_id}/rca-id",
+        "GET /api/v1/alerts/{alert_id}/logs",
+        "GET /api/v1/agent/latest-analysis",
+        "POST /api/v1/agent/suggestions/{suggestion_id}/accept",
+        "POST /api/v1/agent/suggestions/{suggestion_id}/reject",
+        "GET /api/v1/agent/suggestions/{suggestion_id}/evidence",
+        "GET /api/v1/k8s/namespaces",
+        "GET /api/v1/k8s/deployments?namespace=production",
+        "PUT /api/v1/notifications/read-all",
+        "PUT /api/v1/notifications/{notification_id}/read",
+    ):
+        assert path in doc
+
+    for old_path in (
+        "GET /alerts/:id/rca-id",
+        "GET /alerts/:id/logs",
+        "GET /agent/latest-analysis",
+        "POST /agent/suggestions/:id/accept",
+        "GET /k8s/namespaces",
+        "PUT /notifications/read-all",
+        "PUT /notifications/:id/read",
+    ):
+        assert old_path not in doc
+
+    assert "MVP 已实现" in doc
+    assert "告警关联日志从 Redis recent_errors 缓存读取" in doc
+    assert "K8s 列表接口在 Provider 不可用时返回空列表" in doc
+    assert "AI 建议接受/拒绝状态持久化到 agent_runs.node_states" in doc
+
+
 def test_api_docs_mark_project_header_required_for_business_apis():
     doc = Path("docs/AIOps_API_文档.md").read_text()
     assert "### 1.1a 多项目上下文（业务接口必填）" in doc
