@@ -1,0 +1,2 @@
+"""Alert domain services."""
+
