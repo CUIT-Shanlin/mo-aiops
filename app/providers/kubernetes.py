@@ -32,12 +32,15 @@ class KubernetesProvider(BaseProvider[KubernetesDatasourceConfig]):
         timeout_seconds: float = 10.0,
         version_api: Any | None = None,
         core_v1_api: Any | None = None,
+        apps_v1_api: Any | None = None,
     ) -> None:
         super().__init__(project_id, datasource_type, config, timeout_seconds)
         self._version_api = version_api
         self._core_v1_api = core_v1_api
+        self._apps_v1_api = apps_v1_api
         self._external_version_api = version_api is not None
         self._external_core_v1_api = core_v1_api is not None
+        self._external_apps_v1_api = apps_v1_api is not None
         self._api_client: Any | None = None
         self._owns_api_client = False
 
@@ -54,6 +57,8 @@ class KubernetesProvider(BaseProvider[KubernetesDatasourceConfig]):
             self._version_api = None
         if not self._external_core_v1_api:
             self._core_v1_api = None
+        if not self._external_apps_v1_api:
+            self._apps_v1_api = None
 
     async def _query(self, **kwargs: Any) -> Any:
         command_type = kwargs.pop("command_type", None)
@@ -71,6 +76,18 @@ class KubernetesProvider(BaseProvider[KubernetesDatasourceConfig]):
             return {"items": _merge_items(pods)}
         if command_type == "list_nodes":
             return await (await self._get_core_v1_api()).list_node()
+        if command_type == "list_namespaces":
+            return await (await self._get_core_v1_api()).list_namespace()
+        if command_type == "list_deployments":
+            namespace = kwargs.pop("namespace", None)
+            apps_v1_api = await self._get_apps_v1_api()
+            if namespace:
+                return await apps_v1_api.list_namespaced_deployment(namespace)
+            deployments = [
+                await apps_v1_api.list_namespaced_deployment(configured_namespace)
+                for configured_namespace in self.config.namespaces
+            ]
+            return {"items": _merge_items(deployments)}
         raise ProviderError(f"unsupported kubernetes command_type: {command_type}")
 
     async def _notify(self, **kwargs: Any) -> Any:
@@ -121,6 +138,12 @@ class KubernetesProvider(BaseProvider[KubernetesDatasourceConfig]):
             api_client = await self._get_api_client()
             self._core_v1_api = client.CoreV1Api(api_client)
         return self._core_v1_api
+
+    async def _get_apps_v1_api(self) -> Any:
+        if self._apps_v1_api is None:
+            api_client = await self._get_api_client()
+            self._apps_v1_api = client.AppsV1Api(api_client)
+        return self._apps_v1_api
 
 
 def _merge_items(results: list[Any]) -> list[Any]:

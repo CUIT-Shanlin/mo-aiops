@@ -18,9 +18,16 @@ class FakeVersionApi:
 
 
 class FakeCoreV1Api:
-    def __init__(self, pods_result=None, nodes_result=None, pods_by_namespace=None):
+    def __init__(
+        self,
+        pods_result=None,
+        nodes_result=None,
+        namespaces_result=None,
+        pods_by_namespace=None,
+    ):
         self.pods_result = pods_result
         self.nodes_result = nodes_result
+        self.namespaces_result = namespaces_result
         self.pods_by_namespace = pods_by_namespace or {}
         self.calls = []
 
@@ -37,6 +44,23 @@ class FakeCoreV1Api:
     async def list_node(self):
         self.calls.append(("list_node",))
         return self.nodes_result
+
+    async def list_namespace(self):
+        self.calls.append(("list_namespace",))
+        return self.namespaces_result
+
+
+class FakeAppsV1Api:
+    def __init__(self, deployments_result=None, deployments_by_namespace=None):
+        self.deployments_result = deployments_result
+        self.deployments_by_namespace = deployments_by_namespace or {}
+        self.calls = []
+
+    async def list_namespaced_deployment(self, namespace):
+        self.calls.append(("list_namespaced_deployment", namespace))
+        if namespace in self.deployments_by_namespace:
+            return self.deployments_by_namespace[namespace]
+        return self.deployments_result
 
 
 class FakeApiClient:
@@ -142,6 +166,56 @@ async def test_query_list_nodes_uses_core_api():
 
     assert result == {"items": ["node-a"]}
     assert core_v1_api.calls == [("list_node",)]
+
+
+@pytest.mark.asyncio
+async def test_query_list_namespaces_uses_core_api():
+    core_v1_api = FakeCoreV1Api(namespaces_result={"items": ["prod"]})
+    provider = KubernetesProvider(
+        project_id="proj-a",
+        datasource_type="kubernetes",
+        config=KubernetesDatasourceConfig(
+            mode=KubernetesMode.TOKEN,
+            api_server="https://k8s.example",
+        ),
+        core_v1_api=core_v1_api,
+    )
+
+    result = await provider.query(command_type="list_namespaces")
+
+    assert result == {"items": ["prod"]}
+    assert core_v1_api.calls == [("list_namespace",)]
+
+
+@pytest.mark.asyncio
+async def test_query_list_deployments_uses_namespace_or_configured_namespaces():
+    apps_v1_api = FakeAppsV1Api(
+        deployments_by_namespace={
+            "default": {"items": ["deploy-a"]},
+            "monitoring": {"items": ["deploy-b"]},
+        }
+    )
+    provider = KubernetesProvider(
+        project_id="proj-a",
+        datasource_type="kubernetes",
+        config=KubernetesDatasourceConfig(
+            mode=KubernetesMode.TOKEN,
+            api_server="https://k8s.example",
+            namespaces=["default", "monitoring"],
+        ),
+        apps_v1_api=apps_v1_api,
+    )
+
+    result = await provider.query(command_type="list_deployments")
+    namespaced = await provider.query(command_type="list_deployments", namespace="default")
+
+    assert result == {"items": ["deploy-a", "deploy-b"]}
+    assert namespaced == {"items": ["deploy-a"]}
+    assert apps_v1_api.calls == [
+        ("list_namespaced_deployment", "default"),
+        ("list_namespaced_deployment", "monitoring"),
+        ("list_namespaced_deployment", "default"),
+    ]
 
 
 @pytest.mark.asyncio

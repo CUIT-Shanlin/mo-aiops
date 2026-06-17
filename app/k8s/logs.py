@@ -88,6 +88,7 @@ async def restart_pod(
     namespace: str,
     operator: str,
     operator_uid: str | None,
+    reason: str | None = None,
 ) -> HealAction:
     provider = get_k8s_provider(request, project_id)
 
@@ -120,8 +121,9 @@ async def restart_pod(
                 "namespace": action.target_namespace,
                 "status": action.status,
                 "operator": action.operator,
+                "reason": reason,
             },
-            reason=None,
+            reason=reason,
             result="requested",
         )
         await session.commit()

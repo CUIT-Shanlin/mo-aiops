@@ -27,6 +27,61 @@ class FakeK8sProvider:
         self.query_calls.append({"command_type": command_type, **kw})
         if command_type == "pod_logs":
             return self.logs_by_project[self.project_id]
+        if command_type == "list_pods":
+            return {
+                "items": [
+                    {
+                        "metadata": {
+                            "name": "message-0",
+                            "namespace": "prod",
+                            "labels": {"app": "message-service"},
+                        },
+                        "status": {
+                            "phase": "Running",
+                            "pod_ip": "10.0.0.1",
+                            "container_statuses": [
+                                {"restart_count": 0, "ready": True},
+                            ],
+                        },
+                    },
+                    {
+                        "metadata": {
+                            "name": "crash-0",
+                            "namespace": "prod",
+                            "labels": {},
+                        },
+                        "status": {
+                            "phase": "Running",
+                            "container_statuses": [
+                                {
+                                    "restart_count": 3,
+                                    "ready": False,
+                                    "state": {
+                                        "waiting": {"reason": "CrashLoopBackOff"},
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                ]
+            }
+        if command_type == "list_nodes":
+            return {
+                "items": [
+                    {
+                        "metadata": {"name": "node-a"},
+                        "status": {
+                            "conditions": [
+                                {"type": "Ready", "status": "True"},
+                            ],
+                        },
+                    }
+                ]
+            }
+        if command_type == "list_namespaces":
+            return {"items": [{"metadata": {"name": "prod"}}]}
+        if command_type == "list_deployments":
+            return {"items": [{"metadata": {"name": "message-service"}}]}
         raise AssertionError(f"unexpected command_type: {command_type}")
 
     async def notify(self, action: str, **kw):
@@ -157,6 +212,55 @@ async def test_k8s_api_requires_known_enabled_project(
     assert disabled.json() == missing.json()
 
 
+async def test_k8s_overview_and_list_endpoints_use_project_provider(
+    client,
+    auth_headers,
+    k8s_projects_config,
+    fake_k8s_factory,
+):
+    overview = await client.get("/api/v1/k8s/overview", headers=auth_headers)
+    pods = await client.get(
+        "/api/v1/k8s/pods",
+        params={"namespace": "prod", "page": 1, "pageSize": 10},
+        headers=auth_headers,
+    )
+    nodes = await client.get("/api/v1/k8s/nodes", headers=auth_headers)
+    namespaces = await client.get("/api/v1/k8s/namespaces", headers=auth_headers)
+    deployments = await client.get(
+        "/api/v1/k8s/deployments",
+        params={"namespace": "prod"},
+        headers=auth_headers,
+    )
+
+    assert overview.status_code == 200
+    assert overview.json()["data"] == {
+        "nodeCount": 1,
+        "readyNodeCount": 1,
+        "podCount": 2,
+        "runningPodCount": 2,
+        "crashLoopCount": 1,
+        "clusterCpuUsage": 0,
+        "totalCores": 0,
+        "usedCores": 0,
+    }
+    assert pods.json()["data"]["total"] == 2
+    assert pods.json()["data"]["items"][0]["name"] == "message-0"
+    assert nodes.json()["data"][0]["name"] == "node-a"
+    assert namespaces.json()["data"] == ["prod"]
+    assert deployments.json()["data"] == ["message-service"]
+    assert [call["command_type"] for call in fake_k8s_factory["prod"].query_calls[:5]] == [
+        "list_pods",
+        "list_nodes",
+        "list_pods",
+        "list_nodes",
+        "list_namespaces",
+    ]
+    assert fake_k8s_factory["prod"].query_calls[-1] == {
+        "command_type": "list_deployments",
+        "namespace": "prod",
+    }
+
+
 async def test_get_pod_logs_returns_plain_text_and_calls_project_provider(
     client,
     auth_headers,
@@ -249,6 +353,31 @@ async def test_restart_pod_creates_agent_heal_action_and_audit(
     assert [audit.result for audit in audits] == ["requested", "success"]
     assert all(audit.operator_type == "aiops_agent" for audit in audits)
     assert all(audit.resource_type == "heal_action" for audit in audits)
+    assert fake_k8s_factory["prod"].notify_calls == [
+        {
+            "action": "pod_restart",
+            "pod_name": "message-0",
+            "namespace": "prod",
+        }
+    ]
+
+
+async def test_restart_pod_accepts_documented_body_and_returns_task_id(
+    client,
+    auth_headers,
+    k8s_projects_config,
+    fake_k8s_factory,
+):
+    response = await client.post(
+        "/api/v1/k8s/pods/message-0/restart",
+        headers=auth_headers,
+        json={"namespace": "prod", "reason": "CrashLoopBackOff 自动修复"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["code"] == 0
+    assert response.json()["data"]["success"] is True
+    assert response.json()["data"]["taskId"]
     assert fake_k8s_factory["prod"].notify_calls == [
         {
             "action": "pod_restart",
