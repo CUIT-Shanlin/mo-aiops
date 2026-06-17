@@ -13,6 +13,7 @@ from app.core.projects import reset_projects_config
 def _clear_settings_cache(monkeypatch):
     """每个测试前后清 lru_cache，防 monkeypatch env 跨测试污染。"""
     monkeypatch.setenv("STARTUP_PROVIDER_VALIDATION", "false")
+    monkeypatch.setenv("STARTUP_INGEST_ENABLED", "false")
     get_settings.cache_clear()
     reset_projects_config()
     yield

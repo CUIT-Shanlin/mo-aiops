@@ -25,6 +25,7 @@ from app.api.rca import router as rca_router
 from app.api.seeds import router as seeds_router
 from app.api.settings import router as settings_router
 from app.api.topology import router as topology_router
+from app.alerts.ingest import IngestConsumer
 from app.collectors.scheduler import CollectorScheduler
 from app.collectors.windows import MetricWindowStore, TraceCache
 from app.core.config import get_settings
@@ -84,6 +85,17 @@ async def lifespan(app: FastAPI):
         app.state.collector_task = asyncio.create_task(
             app.state.collector_scheduler.run_forever()
         )
+    app.state.ingest_consumer = None
+    app.state.ingest_task = None
+    if settings.startup_ingest_enabled:
+        app.state.ingest_consumer = IngestConsumer(
+            redis=app.state.redis,
+            sessionmaker=app.state.sessionmaker,
+            projects_config=app.state.projects_config,
+        )
+        app.state.ingest_task = asyncio.create_task(
+            app.state.ingest_consumer.run_forever()
+        )
 
     yield
 
@@ -97,6 +109,17 @@ async def lifespan(app: FastAPI):
             pass
     if collector_scheduler is not None:
         await collector_scheduler.stop()
+
+    ingest_task = getattr(app.state, "ingest_task", None)
+    ingest_consumer = getattr(app.state, "ingest_consumer", None)
+    if ingest_consumer is not None:
+        await ingest_consumer.stop()
+    if ingest_task is not None:
+        ingest_task.cancel()
+        try:
+            await ingest_task
+        except asyncio.CancelledError:
+            pass
 
     await app.state.engine.dispose()
     await app.state.redis.aclose()

@@ -6,8 +6,10 @@ from datetime import datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Header, Query, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from app.core.constants import RedisKey
 from app.alerts.service import AlertService
 from app.alerts.state_machine import InvalidAlertTransition
 from app.audit.service import AuditService
@@ -50,6 +52,10 @@ class BatchSuppressRequest(BaseModel):
     reason: str | None = None
 
 
+class AlertWebhookPayload(BaseModel):
+    alerts: list[dict[str, Any]] = Field(default_factory=list)
+
+
 async def require_project_id(
     request: Request,
     x_project_id: Annotated[str | None, Header()] = None,
@@ -62,6 +68,21 @@ async def require_project_id(
     if project is None or not project.enabled:
         raise APIError(ErrorCode.NOT_FOUND, "项目不存在")
     return x_project_id
+
+
+@router.post("/api/v1/alerts/webhook")
+async def alert_webhook(
+    payload: AlertWebhookPayload,
+    request: Request,
+    _current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    project_id: Annotated[str, Depends(require_project_id)],
+) -> JSONResponse:
+    raw_payload = payload.model_dump_json()
+    await request.app.state.redis.lpush(RedisKey.of(project_id, RedisKey.INGEST), raw_payload)
+    return JSONResponse(
+        status_code=202,
+        content={"code": 0, "message": "success", "data": {"accepted": True}},
+    )
 
 
 @router.get("/api/v1/alerts/stats")
