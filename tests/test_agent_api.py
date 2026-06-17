@@ -5,11 +5,13 @@ from types import SimpleNamespace
 import pytest
 
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import text
+from sqlalchemy import select, text
 
 from app.core.projects import ProjectConfig, ProjectsConfig
 from app.collectors.windows import MetricWindowStore, TraceCache
 from app.agent.runs import AgentRunner
+from app.models.heal_action import HealAction
+from app.repositories.alerts import AlertEventCreate, AlertEventRepository
 from app.repositories.agent_runs import AgentRunCreate, AgentRunRepository
 
 
@@ -377,6 +379,180 @@ async def test_main_initializes_shared_cache_for_collector_scheduler(monkeypatch
         assert app.state.trace_cache is created["trace_cache"]
         assert app.state.collector_scheduler.metric_window_store is app.state.metric_window_store
         assert app.state.collector_scheduler.trace_cache is app.state.trace_cache
+
+
+async def test_agent_console_read_endpoints_return_project_scoped_shapes(
+    app_instance,
+    client,
+    make_jwt,
+):
+    await _clean_agent_runs(app_instance)
+    app_instance.state.projects_config = ProjectsConfig(
+        default_project="prod",
+        projects={
+            "prod": ProjectConfig(name="Prod", metric_profile="java"),
+            "stage": ProjectConfig(name="Stage", metric_profile="java"),
+        },
+    )
+    async with app_instance.state.sessionmaker() as session:
+        run = await AgentRunRepository(session, "prod").create(
+            AgentRunCreate(
+                trigger_source="manual",
+                status="completed",
+                fault_service="message-service",
+                anomaly_type="CrashLoopBackOff",
+                severity="critical",
+                confidence=92,
+                root_cause_summary="JVM Heap 使用率异常升高",
+                action_type="pod_restart",
+                target_resource="pod/message-0",
+                auto_heal=True,
+                risk_level="medium",
+                node_states={
+                    "root_cause_node": {
+                        "status": "success",
+                        "duration": "2.1s",
+                        "details": "根因定位完成",
+                    }
+                },
+                evidence_chain={
+                    "metrics": ["heap high"],
+                    "logs": ["oom"],
+                    "traces": ["slow span"],
+                },
+                timeline=[],
+                rag_results=[],
+                analyzed_logs_count=12,
+                related_traces_count=3,
+            )
+        )
+        await AgentRunRepository(session, "stage").create(
+            AgentRunCreate(
+                trigger_source="manual",
+                status="completed",
+                fault_service="stage-service",
+                anomaly_type="HighCPU",
+                root_cause_summary="stage must not leak",
+            )
+        )
+        await session.commit()
+    headers = {
+        "Authorization": f"Bearer {make_jwt(role='admin')}",
+        "X-Project-Id": "prod",
+    }
+
+    stats = await client.get("/api/v1/agent/stats", headers=headers)
+    current = await client.get("/api/v1/agent/current-task", headers=headers)
+    workflow = await client.get("/api/v1/agent/workflow/steps", headers=headers)
+    latest = await client.get("/api/v1/agent/latest-analysis", headers=headers)
+    evidence = await client.get(
+        f"/api/v1/agent/suggestions/{run.id}/evidence",
+        headers=headers,
+    )
+
+    assert stats.json()["data"].keys() >= {
+        "status",
+        "currentTask",
+        "pendingAlerts",
+        "todayAnalysisCount",
+        "adoptionRate",
+    }
+    assert current.json()["data"]["targetService"] == "message-service"
+    assert workflow.json()["data"][0]["id"] == "root_cause_node"
+    assert latest.json()["data"]["rootCause"] == "JVM Heap 使用率异常升高"
+    assert latest.json()["data"]["suggestionStatus"] == "pending"
+    assert evidence.json()["data"]["metrics"] == ["heap high"]
+
+
+async def test_agent_suggestion_accept_and_reject_persist_status(
+    app_instance,
+    client,
+    make_jwt,
+):
+    await _clean_agent_runs(app_instance)
+    async with app_instance.state.sessionmaker() as session:
+        await session.execute(
+            text("TRUNCATE audit_logs, heal_actions, alert_events RESTART IDENTITY CASCADE")
+        )
+        await session.commit()
+    app_instance.state.projects_config = ProjectsConfig(
+        default_project="prod",
+        projects={"prod": ProjectConfig(name="Prod", metric_profile="java")},
+    )
+    async with app_instance.state.sessionmaker() as session:
+        alert = await AlertEventRepository(session, "prod").create(
+            AlertEventCreate(
+                name="PodCrashLoopBackOff",
+                fingerprint="fp-agent-accept",
+                severity="critical",
+                status="firing",
+                service="message-service",
+            )
+        )
+        run = await AgentRunRepository(session, "prod").create(
+            AgentRunCreate(
+                trigger_source="manual",
+                status="completed",
+                alert_event_id=alert.id,
+                fault_service="message-service",
+                anomaly_type="CrashLoopBackOff",
+                confidence=90,
+                root_cause_summary="pod crashed",
+                action_type="pod_restart",
+                target_resource="pod/message-0",
+                risk_level="medium",
+                node_states={},
+                evidence_chain={"metrics": [], "logs": [], "traces": []},
+            )
+        )
+        reject_run = await AgentRunRepository(session, "prod").create(
+            AgentRunCreate(
+                trigger_source="manual",
+                status="completed",
+                root_cause_summary="reject me",
+                node_states={},
+                evidence_chain={},
+            )
+        )
+        await session.commit()
+    headers = {
+        "Authorization": f"Bearer {make_jwt(role='admin', sub='admin-1')}",
+        "X-Project-Id": "prod",
+    }
+
+    accepted = await client.post(
+        f"/api/v1/agent/suggestions/{run.id}/accept",
+        headers=headers,
+        json={"operatorNote": "同意执行"},
+    )
+    accepted_again = await client.post(
+        f"/api/v1/agent/suggestions/{run.id}/accept",
+        headers=headers,
+        json={"operatorNote": "重复点击"},
+    )
+    rejected = await client.post(
+        f"/api/v1/agent/suggestions/{reject_run.id}/reject",
+        headers=headers,
+        json={"reason": "业务高峰"},
+    )
+
+    assert accepted.status_code == 200
+    assert accepted.json()["data"]["healingActionId"]
+    assert accepted_again.json()["data"]["healingActionId"] == accepted.json()["data"]["healingActionId"]
+    assert rejected.json()["data"] == {"success": True}
+    async with app_instance.state.sessionmaker() as session:
+        accepted_run = await AgentRunRepository(session, "prod").get(run.id)
+        rejected_run = await AgentRunRepository(session, "prod").get(reject_run.id)
+        actions = (
+            await session.execute(text("SELECT * FROM heal_actions WHERE project_id='prod'"))
+        ).all()
+        action_rows = (await session.execute(select(HealAction))).scalars().all()
+    assert accepted_run is not None
+    assert rejected_run is not None
+    assert accepted_run.node_states["suggestionStatus"] == "accepted"
+    assert rejected_run.node_states["suggestionStatus"] == "rejected"
+    assert len(actions) == 1
+    assert len(action_rows) == 1
 
 
 async def _async_noop(*args, **kwargs):

@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, cast
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -111,6 +111,21 @@ class AgentRunRepository(ProjectScopedRepository):
         )
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
+
+    async def latest_run(self) -> AgentRun | None:
+        stmt = (
+            self.scope(select(AgentRun))
+            .order_by(AgentRun.created_at.desc(), AgentRun.id.desc())
+            .limit(1)
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def count_created_since(self, since: datetime) -> int:
+        result = await self.session.execute(
+            self.scope(select(func.count()).select_from(AgentRun).where(AgentRun.created_at >= since))
+        )
+        return int(result.scalar_one())
 
     async def finish(
         self,
