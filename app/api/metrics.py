@@ -7,12 +7,15 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Request
 
 from app.api.alerts import require_project_id
+from app.collectors.windows import MetricWindowStore
 from app.core.security import CurrentUser, get_current_user
 from app.schemas.response import success
 
 router = APIRouter(tags=["metrics"])
 
-_METRIC_CATEGORIES = [
+MetricCategory = tuple[str, list[tuple[str, str, str, int | None]]]
+
+_METRIC_CATEGORIES: list[MetricCategory] = [
     (
         "系统资源",
         [
@@ -88,7 +91,7 @@ async def metric_series(
 
 def _latest_metrics(request: Request, project_id: str) -> dict[str, float]:
     store = getattr(request.app.state, "metric_window_store", None)
-    if store is None:
+    if not isinstance(store, MetricWindowStore):
         return {}
     return {sample.canonicalName: sample.value for sample in store.snapshot(project_id)}
 
