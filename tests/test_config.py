@@ -11,6 +11,7 @@ def test_settings_loads_required_fields(monkeypatch):
     assert s.database_url.startswith("postgresql+asyncpg://")
     assert s.redis_db == 1
     assert s.jwt_algorithm == "HS256"
+    assert s.startup_collector_enabled is False
 
 
 def test_settings_missing_jwt_secret_raises(monkeypatch):

@@ -15,6 +15,7 @@ def _mock_projects(monkeypatch):
         projects={
             "test-proj": ProjectConfig(name="Test"),
             "other-proj": ProjectConfig(name="Other"),
+            "disabled-proj": ProjectConfig(name="Disabled", enabled=False),
         },
     )
     monkeypatch.setattr(mod, "_config", test_config)
@@ -22,12 +23,18 @@ def _mock_projects(monkeypatch):
     reset_projects_config()
 
 
-def test_missing_header_returns_default():
-    assert resolve_project_id(None) == "test-proj"
+def test_missing_header_raises_40004():
+    with pytest.raises(APIError) as e:
+        resolve_project_id(None)
+    assert e.value.code == 40004
+    assert e.value.message == "项目不存在"
 
 
-def test_empty_header_returns_default():
-    assert resolve_project_id("") == "test-proj"
+def test_empty_header_raises_40004():
+    with pytest.raises(APIError) as e:
+        resolve_project_id("")
+    assert e.value.code == 40004
+    assert e.value.message == "项目不存在"
 
 
 def test_valid_project_passes():
@@ -38,3 +45,10 @@ def test_unknown_project_raises_40004():
     with pytest.raises(APIError) as e:
         resolve_project_id("nonexistent")
     assert e.value.code == 40004
+
+
+def test_disabled_project_raises_40004():
+    with pytest.raises(APIError) as e:
+        resolve_project_id("disabled-proj")
+    assert e.value.code == 40004
+    assert e.value.message == "项目不存在"

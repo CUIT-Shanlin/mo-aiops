@@ -333,3 +333,115 @@ projects:
         assert app.state.provider_health == {}
 
     assert called is False
+
+
+@pytest.mark.asyncio
+async def test_lifespan_leaves_collector_disabled_by_default(monkeypatch, tmp_path):
+    from app.main import get_app
+
+    path = tmp_path / "projects.yaml"
+    path.write_text(
+        """
+default_project: demo
+projects:
+  demo:
+    name: Demo
+""".strip()
+    )
+
+    monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///tmp/test.db")
+    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379")
+    monkeypatch.setenv("JWT_SECRET", "secret")
+    monkeypatch.setenv("PROJECTS_CONFIG_PATH", str(path))
+    monkeypatch.setenv("STARTUP_PROVIDER_VALIDATION", "false")
+    monkeypatch.delenv("STARTUP_COLLECTOR_ENABLED", raising=False)
+    get_settings.cache_clear()
+
+    monkeypatch.setattr("app.main.ping_db", lambda *_args, **_kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr("app.main.ping_redis", lambda *_args, **_kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr("app.main.run_upgrade_head", lambda: None)
+
+    class _Engine:
+        async def dispose(self) -> None:
+            return None
+
+    monkeypatch.setattr("app.main.create_engine", lambda *_args, **_kwargs: _Engine())
+    monkeypatch.setattr("app.main.make_sessionmaker", lambda *_args, **_kwargs: object())
+
+    class _Redis:
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr("app.main.create_redis", lambda *_args, **_kwargs: _Redis())
+
+    app = get_app()
+    async with app.router.lifespan_context(app):
+        assert app.state.collector_scheduler is None
+        assert app.state.collector_task is None
+
+
+@pytest.mark.asyncio
+async def test_lifespan_starts_and_stops_collector_when_enabled(monkeypatch, tmp_path):
+    from app.main import get_app
+
+    path = tmp_path / "projects.yaml"
+    path.write_text(
+        """
+default_project: demo
+projects:
+  demo:
+    name: Demo
+""".strip()
+    )
+
+    monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///tmp/test.db")
+    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379")
+    monkeypatch.setenv("JWT_SECRET", "secret")
+    monkeypatch.setenv("PROJECTS_CONFIG_PATH", str(path))
+    monkeypatch.setenv("STARTUP_PROVIDER_VALIDATION", "false")
+    monkeypatch.setenv("STARTUP_COLLECTOR_ENABLED", "true")
+    get_settings.cache_clear()
+
+    monkeypatch.setattr("app.main.ping_db", lambda *_args, **_kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr("app.main.ping_redis", lambda *_args, **_kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr("app.main.run_upgrade_head", lambda: None)
+
+    class _Engine:
+        async def dispose(self) -> None:
+            return None
+
+    monkeypatch.setattr("app.main.create_engine", lambda *_args, **_kwargs: _Engine())
+    monkeypatch.setattr("app.main.make_sessionmaker", lambda *_args, **_kwargs: object())
+
+    class _Redis:
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr("app.main.create_redis", lambda *_args, **_kwargs: _Redis())
+
+    started = asyncio.Event()
+    stopped = False
+    instances = []
+
+    class _FakeScheduler:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            instances.append(self)
+
+        async def run_forever(self):
+            started.set()
+            await asyncio.Event().wait()
+
+        async def stop(self):
+            nonlocal stopped
+            stopped = True
+
+    monkeypatch.setattr("app.main.CollectorScheduler", _FakeScheduler)
+
+    app = get_app()
+    async with app.router.lifespan_context(app):
+        await asyncio.wait_for(started.wait(), timeout=1)
+        assert instances[0].kwargs["projects_config"].default_project == "demo"
+        assert app.state.collector_task is not None
+
+    assert stopped is True

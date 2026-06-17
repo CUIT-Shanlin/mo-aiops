@@ -38,6 +38,7 @@ class RedisKey:
     CONFIG = "config"                 # 运行时热更新配置 Hash
     WS_AGENT = "ws:agent"             # M5 PubSub
     WS_HEAL = "ws:heal"               # M5 PubSub
+    WS_METRICS = "ws:metrics"         # M2 PubSub
     RECENT_ERRORS = "recent_errors"   # M2 日志采集
 
     @staticmethod

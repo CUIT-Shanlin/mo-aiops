@@ -1,4 +1,4 @@
-"""健康检查 / metrics 占位（探针不进 /api/v1 前缀）。"""
+"""健康检查 / metrics（探针不进 /api/v1 前缀）。"""
 import asyncio
 
 from fastapi import APIRouter, Request
@@ -29,6 +29,9 @@ async def health(request: Request) -> dict:
 
 
 @router.get("/metrics", response_class=PlainTextResponse)
-async def metrics() -> str:
-    """Prometheus 抓取端点（M0 占位）。"""
-    return "# mo-chat-aiops metrics placeholder\n"
+async def metrics(request: Request) -> PlainTextResponse:
+    """Prometheus 抓取端点。"""
+    return PlainTextResponse(
+        request.app.state.metrics_registry.render(),
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )

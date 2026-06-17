@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     # 项目配置文件路径
     projects_config_path: str = "config/projects.yaml"
     startup_provider_validation: bool = True
+    startup_collector_enabled: bool = False
 
     # 服务间调用（M0 留位）
     java_service_internal_token: str | None = None
