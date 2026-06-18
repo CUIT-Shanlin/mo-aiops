@@ -193,7 +193,7 @@ tests/                     # 单元 + 集成 + API 测试
 ## 9. 文档与协作
 
 - 三份文档发生需求变化时同步更新：`aiops_requirements.md`（后端）、`aiops前端规范.md`（前端）、本文件。
+- **Codebase 文档维护（强制）**：`docs/codebase/` 是新会话理解仓库全貌的模块级文档。任何代码变更只要改变模块职责、数据流、接口、配置、数据模型、Redis key、测试策略或重要约束，必须同步更新对应 `docs/codebase/<module>/README.md`；跨模块变更还要更新 `docs/codebase/README.md`。如果代码变更确认不影响 codebase 文档，最终汇报中要明确说明“无需更新 codebase 文档”的理由。
 - 前端由他人开发：**契约即文档**——优先维护 OpenAPI（FastAPI 自动生成 `/docs`）+ WebSocket 消息格式说明，作为前端对接与联调的权威来源。
 - 联调：开发环境 CORS 放开；提供种子数据/Mock 项目便于前端在无真实数据源时联调。
 - `docs/` 已被 `.gitignore` 忽略；需求文档不进版本库，改动需主动告知协作者。
-
