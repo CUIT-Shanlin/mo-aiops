@@ -1,0 +1,19 @@
+mo-chat-aiops has been deployed.
+
+Release: {{ .Release.Name }}
+Namespace: {{ .Release.Namespace }}
+
+Service:
+  {{ include "mo-chat-aiops.fullname" . }}:{{ .Values.service.port }}
+
+Port forward:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "mo-chat-aiops.fullname" . }} 8000:{{ .Values.service.port }}
+
+Health check:
+  curl -s http://localhost:8000/health
+
+Project config is mounted from ConfigMap:
+  {{ include "mo-chat-aiops.fullname" . }}-config -> {{ .Values.projectsConfig.mountPath }}
+
+Current MVP deployment constraint:
+  Keep replicaCount=1 and uvicorn --workers 1 while STARTUP_COLLECTOR_ENABLED=true.

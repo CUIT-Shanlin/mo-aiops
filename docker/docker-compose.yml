@@ -1,5 +1,6 @@
 services:
   postgres:
+    container_name: aiops-postgres
     image: postgres:16-alpine
     environment:
       POSTGRES_DB: mo_aiops
@@ -16,6 +17,7 @@ services:
       - pgdata:/var/lib/postgresql/data
 
   redis:
+    container_name: aiops-redis
     image: redis:7-alpine
     ports:
       - "6379:6379"

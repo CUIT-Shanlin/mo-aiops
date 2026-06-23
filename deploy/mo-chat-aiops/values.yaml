@@ -1,0 +1,149 @@
+replicaCount: 1
+
+image:
+  repository: registry.example.com/mo-chat-aiops
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+command: []
+args:
+  - uvicorn
+  - app.main:app
+  - --host
+  - 0.0.0.0
+  - --port
+  - "8000"
+  - --workers
+  - "1"
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+rbac:
+  create: true
+  clusterWide: true
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext: {}
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+
+service:
+  type: ClusterIP
+  port: 8000
+  targetPort: http
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: aiops.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 512Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+startupProbe:
+  enabled: false
+  path: /health
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  failureThreshold: 30
+
+readinessProbe:
+  enabled: true
+  path: /health
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 6
+
+livenessProbe:
+  enabled: true
+  path: /health
+  initialDelaySeconds: 30
+  periodSeconds: 20
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+env:
+  REDIS_DB: "1"
+  ADMIN_USERNAME: admin
+  PROJECTS_CONFIG_PATH: /etc/mo-chat-aiops/projects.yaml
+  STARTUP_PROVIDER_VALIDATION: "true"
+  STARTUP_COLLECTOR_ENABLED: "true"
+  STARTUP_INGEST_ENABLED: "true"
+  LLM_PROVIDER: qwen
+  LLM_BASE_URL: https://dashscope.aliyuncs.com/compatible-mode/v1
+  LLM_MODEL: qwen-plus
+  LOG_FORMAT: json
+  ENVIRONMENT: prod
+  CORS_ORIGINS: https://aiops.example.com
+
+secret:
+  create: true
+  name: ""
+  data:
+    DATABASE_URL: postgresql+asyncpg://aiops:replace-me@postgres.aiops.svc.cluster.local:5432/mo_chat_aiops
+    REDIS_URL: redis://redis.aiops.svc.cluster.local:6379
+    JWT_SECRET: replace-with-strong-secret-at-least-32-bytes
+    ADMIN_PASSWORD_HASH: plain:replace-me
+    LLM_API_KEY: replace-me
+
+extraEnv: []
+extraEnvFrom: []
+
+projectsConfig:
+  mountPath: /etc/mo-chat-aiops/projects.yaml
+  content: |
+    default_project: mochat-prod
+
+    projects:
+      mochat-prod:
+        name: "mo-chat 生产"
+        metric_profile: java
+        enabled: true
+        datasources:
+          prometheus:
+            base_url: "http://prometheus.monitoring.svc.cluster.local:9090"
+            verify_ssl: false
+          loki:
+            base_url: "http://loki.monitoring.svc.cluster.local:3100"
+            auth_type: NoAuth
+            verify_ssl: false
+          tempo:
+            base_url: "http://tempo.monitoring.svc.cluster.local:3200"
+            verify_ssl: false
+          kubernetes:
+            mode: in_cluster
+            namespaces: ["production"]
+            verify_ssl: true
+
+extraVolumes: []
+extraVolumeMounts: []
