@@ -314,6 +314,55 @@ async def test_get_pod_logs_stream_returns_sse_lines(
     ]
 
 
+async def test_pod_logs_stream_accepts_project_id_query_for_eventsource(
+    client,
+    make_jwt,
+    k8s_projects_config,
+    fake_k8s_factory,
+):
+    headers = {"Authorization": f"Bearer {make_jwt(role='admin')}"}
+
+    response = await client.get(
+        "/api/v1/k8s/pods/message-0/logs/stream",
+        params={"namespace": "prod", "tail": 2, "project_id": "prod"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert "data: prod line 1" in response.text
+    assert fake_k8s_factory["prod"].stream_calls == [
+        {"pod_name": "message-0", "namespace": "prod", "tail": 2}
+    ]
+
+
+async def test_pod_logs_stream_rejects_conflicting_header_and_query_project_id(
+    client,
+    make_jwt,
+    k8s_projects_config,
+    fake_k8s_factory,
+):
+    headers = {
+        "Authorization": f"Bearer {make_jwt(role='admin')}",
+        "X-Project-Id": "prod",
+    }
+
+    response = await client.get(
+        "/api/v1/k8s/pods/message-0/logs/stream",
+        params={"namespace": "prod", "tail": 2, "project_id": "stage"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "code": 40022,
+        "message": "X-Project-Id 与 project_id 不一致",
+        "data": None,
+    }
+    assert "prod" not in fake_k8s_factory
+    assert "stage" not in fake_k8s_factory
+
+
 async def test_restart_pod_creates_agent_heal_action_and_audit(
     app_instance,
     client,
@@ -552,6 +601,41 @@ async def test_restart_pod_notify_failure_persists_failed_action_and_audits(
     assert [audit.action for audit in audits] == ["POD_RESTART", "POD_RESTART"]
     assert [audit.result for audit in audits] == ["requested", "failed"]
     assert all(audit.operator_type == "aiops_agent" for audit in audits)
+
+
+async def test_update_config_accepts_reason_and_records_it(
+    client,
+    make_jwt,
+    k8s_projects_config,
+    app_instance,
+):
+    headers = {
+        "Authorization": f"Bearer {make_jwt(role='admin', sub='admin')}",
+        "X-Project-Id": "prod",
+    }
+
+    response = await client.put(
+        "/api/v1/settings/configs/aiops.detect_interval_sec",
+        headers=headers,
+        json={"value": "45", "reason": "frontend smoke test"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["code"] == 0
+    async with app_instance.state.sessionmaker() as session:
+        rows = (
+            await session.execute(
+                select(AuditLog)
+                .where(AuditLog.project_id == "prod")
+                .where(AuditLog.action == "CONFIG_UPDATE")
+                .order_by(AuditLog.id)
+            )
+        ).scalars().all()
+    assert [row.result for row in rows] == ["requested", "success"]
+    assert [row.reason for row in rows] == [
+        "frontend smoke test",
+        "frontend smoke test",
+    ]
 
 
 async def test_get_pod_logs_stream_yields_error_event_after_first_chunk(

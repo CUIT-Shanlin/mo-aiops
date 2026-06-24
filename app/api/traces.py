@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Request
 
@@ -20,6 +20,10 @@ async def list_traces(
     request: Request,
     _current_user: Annotated[CurrentUser, Depends(get_current_user)],
     project_id: Annotated[str, Depends(require_project_id)],
+    time_range: Literal["1h", "6h", "24h"] | None = Query(
+        default=None,
+        alias="timeRange",
+    ),
     trace_id: str | None = Query(default=None, alias="traceId"),
     service: str | None = Query(default=None),
     min_duration: float | None = Query(default=None, alias="minDuration"),
@@ -27,6 +31,7 @@ async def list_traces(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=200, alias="pageSize"),
 ) -> dict[str, Any]:
+    _ = time_range
     rows = [
         _trace_summary(current_trace_id, spans)
         for current_trace_id, spans in _snapshot(request, project_id)

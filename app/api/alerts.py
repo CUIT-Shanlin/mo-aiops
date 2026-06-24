@@ -49,9 +49,18 @@ class SuppressRequest(BaseModel):
 
 
 class BatchSuppressRequest(BaseModel):
-    ids: list[int] = Field(min_length=1)
+    ids: list[int | str] = Field(min_length=1)
     duration: int = Field(ge=0)
     reason: str | None = None
+
+    def normalized_ids(self) -> list[int]:
+        alert_ids: list[int] = []
+        for raw_id in self.ids:
+            try:
+                alert_ids.append(int(raw_id))
+            except (TypeError, ValueError) as exc:
+                raise APIError(ErrorCode.VALIDATION_ERROR, "告警 ID 格式无效") from exc
+        return alert_ids
 
 
 class AlertWebhookPayload(BaseModel):
@@ -278,11 +287,12 @@ async def batch_suppress_alerts(
     current_user: Annotated[CurrentUser, Depends(get_current_user)],
     project_id: Annotated[str, Depends(require_project_id)],
 ) -> dict[str, Any]:
+    alert_ids = payload.normalized_ids()
     async with request.app.state.sessionmaker() as session:
         alert_repository = AlertEventRepository(session, project_id)
         service = AlertService(alert_repository)
         audit_service = AuditService(AuditLogRepository(session, project_id))
-        for alert_id in payload.ids:
+        for alert_id in alert_ids:
             before = await alert_repository.get(alert_id)
             if before is None:
                 raise APIError(ErrorCode.NOT_FOUND, "告警不存在")
@@ -304,7 +314,7 @@ async def batch_suppress_alerts(
                 suppress_duration=payload.duration,
             )
         await session.commit()
-    return success({"success": True, "count": len(payload.ids)})
+    return success({"success": True, "count": len(alert_ids)})
 
 
 @router.get("/api/v1/alert-groups")

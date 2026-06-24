@@ -20,11 +20,19 @@ async def test_login_me_refresh_logout_contract(client, monkeypatch):
     assert body["code"] == 0
     token = body["data"]["token"]
     refresh_token = body["data"]["refreshToken"]
-    assert body["data"]["user"] == {"id": "admin", "username": "admin", "role": "admin"}
+    expected_user = {
+        "id": "admin",
+        "username": "admin",
+        "role": "admin",
+        "avatar": None,
+        "email": None,
+        "permissions": ["*"],
+    }
+    assert body["data"]["user"] == expected_user
 
     headers = {"Authorization": f"Bearer {token}"}
     me = await client.get("/api/v1/auth/me", headers=headers)
-    assert me.json()["data"] == {"id": "admin", "username": "admin", "role": "admin"}
+    assert me.json()["data"] == expected_user
 
     refreshed = await client.post(
         "/api/v1/auth/refresh",

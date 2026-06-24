@@ -361,6 +361,56 @@ async def test_batch_suppress_transitions_each_alert_and_writes_each_audit(
     ]
 
 
+async def test_batch_suppress_accepts_string_alert_ids(
+    client,
+    auth_headers,
+    app_instance,
+    alerts_projects_config,
+):
+    alert_id = await _seed_alert(app_instance, status="firing")
+
+    response = await client.post(
+        "/api/v1/alerts/batch-suppress",
+        headers=auth_headers,
+        json={"ids": [str(alert_id)], "duration": 300, "reason": "frontend ids"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["code"] == 0
+    assert response.json()["data"] == {"success": True, "count": 1}
+    async with app_instance.state.sessionmaker() as session:
+        alert = await AlertEventRepository(session, "prod").get(alert_id)
+    assert alert is not None
+    assert alert.status == "suppressed"
+
+    openapi = (await client.get("/openapi.json")).json()
+    ids_items = openapi["components"]["schemas"]["BatchSuppressRequest"]["properties"]["ids"][
+        "items"
+    ]
+    assert {"integer", "string"} <= {
+        item.get("type") for item in ids_items.get("anyOf", [])
+    }
+
+
+async def test_batch_suppress_rejects_invalid_string_alert_ids(
+    client,
+    auth_headers,
+    alerts_projects_config,
+):
+    response = await client.post(
+        "/api/v1/alerts/batch-suppress",
+        headers=auth_headers,
+        json={"ids": ["not-a-number"], "duration": 300, "reason": "bad id"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "code": 40022,
+        "message": "告警 ID 格式无效",
+        "data": None,
+    }
+
+
 async def test_suppress_alert_accepts_duration_and_records_it_in_audit(
     app_instance,
     client,

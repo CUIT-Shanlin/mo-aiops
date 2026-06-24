@@ -109,5 +109,12 @@ def _verify_password(password: str, stored_hash: str) -> bool:
     return False
 
 
-def _admin_user(username: str) -> dict[str, str]:
-    return {"id": username, "username": username, "role": "admin"}
+def _admin_user(username: str) -> dict[str, Any]:
+    return {
+        "id": username,
+        "username": username,
+        "role": "admin",
+        "avatar": None,
+        "email": None,
+        "permissions": ["*"],
+    }

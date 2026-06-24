@@ -6,3 +6,4 @@ from app.models.base import Base  # noqa: F401
 from app.models.heal_action import HealAction  # noqa: F401
 from app.models.notification import Notification  # noqa: F401
 from app.models.saved_query import SavedQuery  # noqa: F401
+from app.models.user import User  # noqa: F401

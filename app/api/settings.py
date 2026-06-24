@@ -22,6 +22,7 @@ router = APIRouter(tags=["settings"])
 class UpdateConfigRequest(BaseModel):
     value: str
     confirm: bool = False
+    reason: str | None = None
 
 
 @router.get("/api/v1/settings/categories")
@@ -72,6 +73,7 @@ async def update_config(
         before_state=before_state,
         after_state=after_state,
         result="requested",
+        reason=payload.reason,
     )
     try:
         await service.write_override(key, payload.value)
@@ -97,6 +99,7 @@ async def update_config(
             before_state=before_state,
             after_state=after_state,
             result="success",
+            reason=payload.reason,
         )
     except Exception:
         pass

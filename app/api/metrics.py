@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 
 from app.api.alerts import require_project_id
 from app.collectors.windows import MetricWindowStore
@@ -84,7 +84,10 @@ async def metric_series(
     request: Request,
     _current_user: Annotated[CurrentUser, Depends(get_current_user)],
     project_id: Annotated[str, Depends(require_project_id)],
+    time_range: str | None = Query(default=None, alias="timeRange"),
+    step: str | None = Query(default=None),
 ) -> dict[str, Any]:
+    _ = (time_range, step)
     value = _latest_metrics(request, project_id).get(name, 0)
     return success([{"time": datetime.now(UTC).strftime("%H:%M"), "value": value, "baseline": value}])
 

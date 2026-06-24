@@ -5,6 +5,7 @@ from sqlalchemy import select, text
 from app.collectors.models import SpanSummary
 from app.core.projects import ProjectConfig, ProjectsConfig
 from app.models.audit_log import AuditLog
+from app.repositories.users import UserCreate, UserRepository
 
 
 def _set_projects(app_instance) -> None:
@@ -30,7 +31,7 @@ async def _clean(app_instance) -> None:
     async with app_instance.state.sessionmaker() as session:
         await session.execute(
             text(
-                "TRUNCATE audit_logs, heal_actions, agent_runs, alert_events "
+                "TRUNCATE users, audit_logs, heal_actions, agent_runs, alert_events "
                 "RESTART IDENTITY CASCADE"
             )
         )
@@ -164,6 +165,57 @@ async def test_traces_routes_read_project_trace_cache(client, make_jwt, app_inst
     assert services.json()["data"] == ["gateway", "message-service"]
 
 
+async def test_metrics_and_traces_accept_frontend_time_query_params(
+    client,
+    make_jwt,
+    app_instance,
+):
+    _set_projects(app_instance)
+    app_instance.state.metric_window_store.add("prod", "msg.throughput", 12600)
+    app_instance.state.trace_cache.put(
+        "prod",
+        "trace-prod",
+        [
+            SpanSummary(
+                traceId="trace-prod",
+                spanId="s1",
+                service="gateway",
+                name="gateway.receive",
+                durationMs=10,
+                status="success",
+            )
+        ],
+    )
+    headers = _headers(make_jwt(role="admin"))
+
+    metric_series = await client.get(
+        "/api/v1/metrics/msg.throughput/series?timeRange=1h&step=1m",
+        headers=headers,
+    )
+    traces = await client.get("/api/v1/traces?timeRange=1h", headers=headers)
+
+    assert metric_series.status_code == 200
+    assert metric_series.json()["code"] == 0
+    assert metric_series.json()["data"][0]["value"] == 12600
+    assert traces.status_code == 200
+    assert traces.json()["code"] == 0
+    assert traces.json()["data"]["items"][0]["traceId"] == "trace-prod"
+
+    openapi = (await client.get("/openapi.json")).json()
+    metrics_parameters = {
+        parameter["name"]
+        for parameter in openapi["paths"]["/api/v1/metrics/{name}/series"]["get"][
+            "parameters"
+        ]
+    }
+    traces_parameters = {
+        parameter["name"]
+        for parameter in openapi["paths"]["/api/v1/traces"]["get"]["parameters"]
+    }
+    assert {"timeRange", "step"} <= metrics_parameters
+    assert "timeRange" in traces_parameters
+
+
 async def test_users_ban_and_unban_validate_body_and_write_audit(
     client,
     make_jwt,
@@ -172,14 +224,15 @@ async def test_users_ban_and_unban_validate_body_and_write_audit(
     await _clean(app_instance)
     _set_projects(app_instance)
     headers = _headers(make_jwt(role="admin", sub="admin-1"))
+    await client.get("/api/v1/users", headers=headers)
 
     missing = await client.post(
-        "/api/v1/users/u1/ban",
+        "/api/v1/users/admin/ban",
         headers=headers,
         json={"reason": "spam"},
     )
     banned = await client.post(
-        "/api/v1/users/u1/ban",
+        "/api/v1/users/admin/ban",
         headers=headers,
         json={
             "reason": "spam",
@@ -188,7 +241,7 @@ async def test_users_ban_and_unban_validate_body_and_write_audit(
         },
     )
     unbanned = await client.post(
-        "/api/v1/users/u1/unban",
+        "/api/v1/users/admin/unban",
         headers=headers,
         json={"reason": "appeal accepted"},
     )
@@ -205,7 +258,151 @@ async def test_users_ban_and_unban_validate_body_and_write_audit(
         ).scalars().all()
     assert [audit.action for audit in audits] == ["USER_BAN", "USER_UNBAN"]
     assert audits[0].after_state == {
-        "userId": "u1",
+        "userId": "admin",
         "duration": "1h",
         "forceDisconnect": True,
     }
+
+
+async def test_users_missing_ban_unban_return_not_found(
+    client,
+    make_jwt,
+    app_instance,
+):
+    await _clean(app_instance)
+    _set_projects(app_instance)
+    headers = _headers(make_jwt(role="admin", sub="admin-1"))
+    await client.get("/api/v1/users", headers=headers)
+
+    banned = await client.post(
+        "/api/v1/users/missing/ban",
+        headers=headers,
+        json={"reason": "missing", "duration": "1h", "forceDisconnect": False},
+    )
+    unbanned = await client.post(
+        "/api/v1/users/missing/unban",
+        headers=headers,
+        json={"reason": "missing"},
+    )
+
+    assert banned.json() == {"code": 40004, "message": "用户不存在", "data": None}
+    assert unbanned.json() == {"code": 40004, "message": "用户不存在", "data": None}
+    async with app_instance.state.sessionmaker() as session:
+        audits = (
+            await session.execute(
+                select(AuditLog).where(AuditLog.project_id == "prod").order_by(AuditLog.id)
+            )
+        ).scalars().all()
+    assert [audit.action for audit in audits] == []
+
+
+async def test_users_list_stats_detail_use_local_users_table(
+    client,
+    make_jwt,
+    app_instance,
+):
+    await _clean(app_instance)
+    _set_projects(app_instance)
+    headers = _headers(make_jwt(role="admin", sub="admin"))
+
+    stats = await client.get("/api/v1/users/stats", headers=headers)
+    users = await client.get("/api/v1/users", headers=headers)
+    detail = await client.get("/api/v1/users/admin", headers=headers)
+
+    assert stats.json()["data"] == {
+        "total": 1,
+        "online": 0,
+        "banned": 0,
+        "highRisk": 0,
+        "riskUsers": 0,
+    }
+    assert users.json()["data"]["total"] == 1
+    assert users.json()["data"]["items"][0] == {
+        "id": "admin",
+        "username": "admin",
+        "isBanned": False,
+        "onlineStatus": "offline",
+        "riskLevel": "normal",
+        "todayMessages": 0,
+        "lastLogin": None,
+        "registeredAt": users.json()["data"]["items"][0]["registeredAt"],
+        "avatar": None,
+        "email": None,
+    }
+    assert detail.json()["data"]["id"] == "admin"
+    assert detail.json()["data"]["onlineStatus"] == "offline"
+    assert detail.json()["data"]["riskLevel"] == "normal"
+
+
+async def test_users_filters_and_ban_unban_update_local_user(
+    client,
+    make_jwt,
+    app_instance,
+):
+    await _clean(app_instance)
+    _set_projects(app_instance)
+    headers = _headers(make_jwt(role="admin", sub="admin"))
+    await client.get("/api/v1/users", headers=headers)
+    async with app_instance.state.sessionmaker() as session:
+        repo = UserRepository(session, "prod")
+        await repo.create(
+            UserCreate(
+                id="alice",
+                username="alice",
+                online_status="offline",
+                risk_level="normal",
+            )
+        )
+        await repo.create(
+            UserCreate(
+                id="bob",
+                username="bob",
+                online_status="online",
+                risk_level="high",
+            )
+        )
+        await session.commit()
+
+    missing_filter = await client.get(
+        "/api/v1/users",
+        params={"keyword": "missing"},
+        headers=headers,
+    )
+    banned = await client.post(
+        "/api/v1/users/admin/ban",
+        headers=headers,
+        json={"reason": "abuse", "duration": "1h", "forceDisconnect": True},
+    )
+    banned_filter = await client.get(
+        "/api/v1/users",
+        params={"isBanned": True},
+        headers=headers,
+    )
+    filtered_page = await client.get(
+        "/api/v1/users",
+        params={
+            "onlineStatus": "offline",
+            "riskLevel": "normal",
+            "page": 1,
+            "pageSize": 1,
+        },
+        headers=headers,
+    )
+    unbanned = await client.post(
+        "/api/v1/users/admin/unban",
+        headers=headers,
+        json={"reason": "appeal accepted"},
+    )
+    detail = await client.get("/api/v1/users/admin", headers=headers)
+
+    assert missing_filter.json()["data"]["total"] == 0
+    assert banned.json()["data"] == {"success": True, "forceDisconnect": True}
+    assert banned_filter.json()["data"]["total"] == 1
+    assert banned_filter.json()["data"]["items"][0]["isBanned"] is True
+    assert filtered_page.json()["data"]["page"] == 1
+    assert filtered_page.json()["data"]["pageSize"] == 1
+    assert filtered_page.json()["data"]["total"] == 2
+    assert len(filtered_page.json()["data"]["items"]) == 1
+    assert filtered_page.json()["data"]["items"][0]["id"] == "admin"
+    assert unbanned.json()["data"] == {"success": True}
+    assert detail.json()["data"]["isBanned"] is False

@@ -4,11 +4,14 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Body, Depends, Query, Request
+from fastapi import APIRouter, Body, Depends, Header, Query, Request
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.api.alerts import require_project_id
+from app.core.constants import ErrorCode
+from app.core.logging import set_project_id
+from app.core.projects import get_projects_config
 from app.core.security import CurrentUser, get_current_user
 from app.k8s.logs import (
     get_k8s_provider,
@@ -27,6 +30,24 @@ router = APIRouter(tags=["k8s"])
 class PodRestartRequest(BaseModel):
     namespace: str | None = Field(default=None, min_length=1)
     reason: str | None = None
+
+
+async def require_project_id_for_sse(
+    request: Request,
+    x_project_id: Annotated[str | None, Header()] = None,
+    project_id: str | None = Query(default=None),
+) -> str:
+    if x_project_id and project_id and x_project_id != project_id:
+        raise APIError(ErrorCode.VALIDATION_ERROR, "X-Project-Id 与 project_id 不一致")
+    effective_project_id = x_project_id or project_id
+    if not effective_project_id:
+        raise APIError(ErrorCode.NOT_FOUND, "项目不存在")
+    config = getattr(request.app.state, "projects_config", None) or get_projects_config()
+    project = config.projects.get(effective_project_id)
+    if project is None or not project.enabled:
+        raise APIError(ErrorCode.NOT_FOUND, "项目不存在")
+    set_project_id(effective_project_id)
+    return effective_project_id
 
 
 @router.get("/api/v1/k8s/overview")
@@ -184,7 +205,7 @@ async def pod_logs_stream(
     name: str,
     request: Request,
     _current_user: Annotated[CurrentUser, Depends(get_current_user)],
-    project_id: Annotated[str, Depends(require_project_id)],
+    project_id: Annotated[str, Depends(require_project_id_for_sse)],
     namespace: str = Query(..., min_length=1),
     tail: int = Query(default=100, ge=1, le=10000),
 ) -> StreamingResponse:
