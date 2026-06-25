@@ -14,7 +14,7 @@
 
 例外响应：
 
-- `POST /api/v1/alerts/webhook` 返回 HTTP 202。
+- `POST /api/v1/alerts/webhook` 返回 HTTP 202。该项目标识解析采用三级降级策略：①显式 `X-Project-Id` 请求头（最高优先级，缺失/禁用直接拒绝）→ ②告警 labels 中的 `project_id` 字段 → ③YAML 配置的 `default_project`。这使得 K8s 环境下 Alertmanager（原生不支持自定义 header）可通过在告警 labels 中注入 `project_id` 来路由到正确的项目。
 - `GET /api/v1/k8s/pods/{name}/logs` 返回纯文本。
 - `GET /api/v1/k8s/pods/{name}/logs/stream` 返回 SSE。
 - SSE 日志流因浏览器 `EventSource` 不能设置自定义 Header，兼容 `?project_id=`；其他业务接口仍要求 `X-Project-Id`。

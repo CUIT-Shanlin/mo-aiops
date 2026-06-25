@@ -66,7 +66,10 @@ class IngestConsumer:
         self._stopped = True
 
     async def run_forever(self) -> None:
-        """Continuously consume enabled project ingest queues."""
+        """Continuously consume enabled project ingest queues.
+
+        Redis 连接断开时自动重试，不崩溃退出。
+        """
         while not self._stopped:
             keys = [
                 RedisKey.of(project_id, RedisKey.INGEST)
@@ -76,7 +79,12 @@ class IngestConsumer:
             if not keys:
                 await asyncio.sleep(self.timeout_seconds)
                 continue
-            item = await self.redis.brpop(keys, timeout=self.timeout_seconds)
+            try:
+                item = await self.redis.brpop(keys, timeout=self.timeout_seconds)
+            except Exception:
+                log.warning("redis brpop failed, retrying", exc_info=True)
+                await asyncio.sleep(1)
+                continue
             if item is None:
                 continue
             raw_key, raw_payload = item

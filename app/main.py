@@ -81,6 +81,16 @@ async def lifespan(app: FastAPI):
         app.state.provider_health = await validate_configured_providers(
             app.state.projects_config
         )
+    async def _log_task_exception(awaitable, name: str):
+        try:
+            await awaitable
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logging.getLogger("startup").exception(
+                "background task %s crashed", name
+            )
+
     app.state.collector_scheduler = None
     app.state.collector_task = None
     if settings.startup_collector_enabled:
@@ -91,7 +101,10 @@ async def lifespan(app: FastAPI):
             trace_cache=app.state.trace_cache,
         )
         app.state.collector_task = asyncio.create_task(
-            app.state.collector_scheduler.run_forever()
+            _log_task_exception(
+                app.state.collector_scheduler.run_forever(),
+                "collector_scheduler",
+            )
         )
     app.state.ingest_consumer = None
     app.state.ingest_task = None
@@ -102,7 +115,10 @@ async def lifespan(app: FastAPI):
             projects_config=app.state.projects_config,
         )
         app.state.ingest_task = asyncio.create_task(
-            app.state.ingest_consumer.run_forever()
+            _log_task_exception(
+                app.state.ingest_consumer.run_forever(),
+                "ingest_consumer",
+            )
         )
 
     yield

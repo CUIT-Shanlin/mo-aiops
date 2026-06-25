@@ -84,20 +84,115 @@ async def test_alert_webhook_requires_known_enabled_project(
     _set_projects(app_instance)
     token = make_jwt(role="admin")
 
-    missing = await client.post(
-        "/api/v1/alerts/webhook",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"alerts": []},
-    )
     disabled = await client.post(
         "/api/v1/alerts/webhook",
         headers=_headers(token, "disabled"),
         json={"alerts": []},
     )
 
-    assert missing.status_code == 200
-    assert missing.json() == {"code": 40004, "message": "项目不存在", "data": None}
-    assert disabled.json() == missing.json()
+    assert disabled.status_code == 200
+    assert disabled.json() == {"code": 40004, "message": "项目不存在", "data": None}
+
+
+async def test_alert_webhook_fallback_to_project_id_in_labels(
+    client,
+    make_jwt,
+    app_instance,
+):
+    _set_projects(app_instance)
+    payload = {
+        "alerts": [
+            {
+                "status": "firing",
+                "labels": {
+                    "alertname": "HighCPU",
+                    "project_id": "prod",
+                    "service": "message-service",
+                    "namespace": "production",
+                    "pod": "message-0",
+                    "severity": "critical",
+                },
+            }
+        ]
+    }
+
+    response = await client.post(
+        "/api/v1/alerts/webhook",
+        headers={"Authorization": f"Bearer {make_jwt(role='admin')}"},
+        json=payload,
+    )
+
+    assert response.status_code == 202
+    queued = await app_instance.state.redis.rpop(
+        RedisKey.of("prod", RedisKey.INGEST)
+    )
+    assert queued is not None
+
+
+async def test_alert_webhook_fallback_to_default_project(
+    client,
+    make_jwt,
+    app_instance,
+):
+    _set_projects(app_instance)
+    payload = {
+        "alerts": [
+            {
+                "status": "firing",
+                "labels": {
+                    "alertname": "HighCPU",
+                    "service": "message-service",
+                    "namespace": "production",
+                    "pod": "message-0",
+                    "severity": "critical",
+                },
+            }
+        ]
+    }
+
+    response = await client.post(
+        "/api/v1/alerts/webhook",
+        headers={"Authorization": f"Bearer {make_jwt(role='admin')}"},
+        json=payload,
+    )
+
+    assert response.status_code == 202
+    queued = await app_instance.state.redis.rpop(
+        RedisKey.of("prod", RedisKey.INGEST)
+    )
+    assert queued is not None
+
+
+async def test_alert_webhook_fails_when_no_project_resolvable(
+    client,
+    make_jwt,
+    app_instance,
+):
+    app_instance.state.projects_config = ProjectsConfig(
+        default_project="prod",
+        projects={
+            "prod": ProjectConfig(
+                name="Prod", metric_profile="java", enabled=False
+            ),
+        },
+    )
+    payload = {
+        "alerts": [
+            {
+                "status": "firing",
+                "labels": {"alertname": "HighCPU"},
+            }
+        ]
+    }
+
+    response = await client.post(
+        "/api/v1/alerts/webhook",
+        headers={"Authorization": f"Bearer {make_jwt(role='admin')}"},
+        json=payload,
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"code": 40004, "message": "项目不存在", "data": None}
 
 
 async def test_process_ingest_payload_deduplicates_and_persists_alert(app_instance):

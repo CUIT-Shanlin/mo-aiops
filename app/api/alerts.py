@@ -72,13 +72,53 @@ async def require_project_id(
     x_project_id: Annotated[str | None, Header()] = None,
 ) -> str:
     """Resolve X-Project-Id; missing, unknown, and disabled all look not found."""
-    if not x_project_id:
-        raise APIError(ErrorCode.NOT_FOUND, "项目不存在")
+    if x_project_id:
+        config = getattr(request.app.state, "projects_config", None) or get_projects_config()
+        project = config.projects.get(x_project_id)
+        if project is not None and project.enabled:
+            return x_project_id
+    raise APIError(ErrorCode.NOT_FOUND, "项目不存在")
+
+
+async def _resolve_project_id_for_webhook(
+    request: Request,
+    x_project_id: Annotated[str | None, Header()] = None,
+) -> str:
+    """Resolve project for webhook: header first, then alert labels fallback.
+
+    When an explicit ``X-Project-Id`` header is present, it is authoritative —
+    an invalid or disabled project is rejected immediately without falling back
+    to labels or the default project.  This prevents silent misrouting when the
+    caller intentionally targets a specific project.
+    """
     config = getattr(request.app.state, "projects_config", None) or get_projects_config()
-    project = config.projects.get(x_project_id)
-    if project is None or not project.enabled:
+
+    if x_project_id is not None:
+        project = config.projects.get(x_project_id)
+        if project is not None and project.enabled:
+            return x_project_id
         raise APIError(ErrorCode.NOT_FOUND, "项目不存在")
-    return x_project_id
+
+    import json as _json
+    body = await request.body()
+    try:
+        payload = _json.loads(body)
+    except Exception:
+        payload = {}
+    for alert in payload.get("alerts") or []:
+        labels = alert.get("labels") or {}
+        pid = labels.get("project_id")
+        if isinstance(pid, str) and pid:
+            project = config.projects.get(pid)
+            if project is not None and project.enabled:
+                return pid
+
+    default = config.default_project
+    project = config.projects.get(default)
+    if project is not None and project.enabled:
+        return default
+
+    raise APIError(ErrorCode.NOT_FOUND, "项目不存在")
 
 
 @router.post("/api/v1/alerts/webhook")
@@ -86,7 +126,7 @@ async def alert_webhook(
     payload: AlertWebhookPayload,
     request: Request,
     _current_user: Annotated[CurrentUser, Depends(get_current_user)],
-    project_id: Annotated[str, Depends(require_project_id)],
+    project_id: Annotated[str, Depends(_resolve_project_id_for_webhook)],
 ) -> JSONResponse:
     raw_payload = payload.model_dump_json()
     await request.app.state.redis.lpush(RedisKey.of(project_id, RedisKey.INGEST), raw_payload)
