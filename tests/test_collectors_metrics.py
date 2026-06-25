@@ -97,19 +97,19 @@ async def test_collect_project_metrics_resolves_canonical_promql():
         project=project,
         provider=provider,
         window_store=store,
-        canonical_metrics=["conn.active", "runtime.memory_used_ratio"],
+        canonical_metrics=["sys.cpu", "runtime.memory_used_ratio"],
     )
 
     assert [sample.canonicalName for sample in samples] == [
-        "conn.active",
+        "sys.cpu",
         "runtime.memory_used_ratio",
     ]
     assert [sample.value for sample in samples] == [42.5, 42.5]
     assert provider.queries == [
-        {"query_type": "instant", "query": "sum(netty_connections_active_total)"},
+        {"query_type": "instant", "query": "sum(rate(process_cpu_seconds_total{namespace='mochat'}[5m]))"},
         {
             "query_type": "instant",
-            "query": "sum(jvm_memory_used_bytes) / sum(jvm_memory_max_bytes)",
+            "query": "sum(jvm_memory_used_bytes{namespace='mochat'}) / sum(jvm_memory_max_bytes{namespace='mochat'})",
         },
     ]
 
@@ -124,7 +124,7 @@ async def test_collect_project_metrics_skips_bad_payload_and_continues():
         project=project,
         provider=provider,
         window_store=store,
-        canonical_metrics=["conn.active", "runtime.memory_used_ratio"],
+        canonical_metrics=["sys.cpu", "runtime.memory_used_ratio"],
     )
 
     assert [sample.canonicalName for sample in samples] == [
@@ -132,10 +132,10 @@ async def test_collect_project_metrics_skips_bad_payload_and_continues():
     ]
     assert [sample.value for sample in samples] == [8.5]
     assert provider.queries == [
-        {"query_type": "instant", "query": "sum(netty_connections_active_total)"},
+        {"query_type": "instant", "query": "sum(rate(process_cpu_seconds_total{namespace='mochat'}[5m]))"},
         {
             "query_type": "instant",
-            "query": "sum(jvm_memory_used_bytes) / sum(jvm_memory_max_bytes)",
+            "query": "sum(jvm_memory_used_bytes{namespace='mochat'}) / sum(jvm_memory_max_bytes{namespace='mochat'})",
         },
     ]
 
@@ -150,7 +150,7 @@ async def test_collect_project_metrics_skips_failed_query_and_continues():
         project=project,
         provider=provider,
         window_store=store,
-        canonical_metrics=["conn.active", "runtime.memory_used_ratio"],
+        canonical_metrics=["sys.cpu", "runtime.memory_used_ratio"],
     )
 
     assert [sample.canonicalName for sample in samples] == [
@@ -158,9 +158,9 @@ async def test_collect_project_metrics_skips_failed_query_and_continues():
     ]
     assert [sample.value for sample in samples] == [7.5]
     assert provider.queries == [
-        {"query_type": "instant", "query": "sum(netty_connections_active_total)"},
+        {"query_type": "instant", "query": "sum(rate(process_cpu_seconds_total{namespace='mochat'}[5m]))"},
         {
             "query_type": "instant",
-            "query": "sum(jvm_memory_used_bytes) / sum(jvm_memory_max_bytes)",
+            "query": "sum(jvm_memory_used_bytes{namespace='mochat'}) / sum(jvm_memory_max_bytes{namespace='mochat'})",
         },
     ]

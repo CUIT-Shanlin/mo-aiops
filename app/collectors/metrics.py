@@ -14,13 +14,13 @@ class PrometheusProvider(Protocol):
         ...
 
 DEFAULT_CANONICAL_METRICS = (
-    "conn.active",
-    "msg.throughput",
-    "msg.p99_latency",
-    "mq.backlog",
     "runtime.memory_used_ratio",
     "runtime.gc_pause",
     "http.error_rate",
+    "sys.cpu",
+    "sys.memory",
+    "jvm.threads",
+    "jvm.classes_loaded",
 )
 
 

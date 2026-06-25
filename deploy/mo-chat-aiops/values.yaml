@@ -1,9 +1,12 @@
+# Helm 部署配置 — 敏感值不要写在这里，通过 .env.deploy + deploy.sh 注入
+# 参考: .env.deploy.example
+
 replicaCount: 1
 
 image:
-  repository: registry.example.com/mo-chat-aiops
+  repository: mo-chat-aiops
   tag: "0.1.0"
-  pullPolicy: IfNotPresent
+  pullPolicy: Never
 
 imagePullSecrets: []
 nameOverride: ""
@@ -99,22 +102,23 @@ env:
   STARTUP_PROVIDER_VALIDATION: "true"
   STARTUP_COLLECTOR_ENABLED: "true"
   STARTUP_INGEST_ENABLED: "true"
-  LLM_PROVIDER: qwen
-  LLM_BASE_URL: https://dashscope.aliyuncs.com/compatible-mode/v1
-  LLM_MODEL: qwen-plus
+  LLM_PROVIDER: openai
+  LLM_BASE_URL: https://api.deepseek.com/v1
+  LLM_MODEL: deepseek-v4-pro
   LOG_FORMAT: json
   ENVIRONMENT: prod
-  CORS_ORIGINS: https://aiops.example.com
+  CORS_ORIGINS: "*"
 
 secret:
   create: true
   name: ""
+  # 敏感值占位，deploy.sh 会通过 --set-string 覆盖
   data:
-    DATABASE_URL: postgresql+asyncpg://aiops:replace-me@postgres.aiops.svc.cluster.local:5432/mo_chat_aiops
-    REDIS_URL: redis://redis.aiops.svc.cluster.local:6379
-    JWT_SECRET: replace-with-strong-secret-at-least-32-bytes
-    ADMIN_PASSWORD_HASH: plain:replace-me
-    LLM_API_KEY: replace-me
+    DATABASE_URL: ""
+    REDIS_URL: ""
+    JWT_SECRET: ""
+    ADMIN_PASSWORD_HASH: ""
+    LLM_API_KEY: ""
 
 extraEnv: []
 extraEnvFrom: []
@@ -131,19 +135,19 @@ projectsConfig:
         enabled: true
         datasources:
           prometheus:
-            base_url: "http://prometheus.monitoring.svc.cluster.local:9090"
+            base_url: "http://prometheus.mochat-observability.svc.cluster.local:9090"
             verify_ssl: false
           loki:
-            base_url: "http://loki.monitoring.svc.cluster.local:3100"
+            base_url: "http://loki.mochat-observability.svc.cluster.local:3100"
             auth_type: NoAuth
             verify_ssl: false
           tempo:
-            base_url: "http://tempo.monitoring.svc.cluster.local:3200"
+            base_url: "http://tempo.mochat-observability.svc.cluster.local:3200"
             verify_ssl: false
           kubernetes:
             mode: in_cluster
-            namespaces: ["production"]
-            verify_ssl: true
+            namespaces: ["mochat"]
+            verify_ssl: false
 
 extraVolumes: []
 extraVolumeMounts: []

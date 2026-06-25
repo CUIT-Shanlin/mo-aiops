@@ -8,17 +8,16 @@ projects:
     enabled: true
     datasources:
       prometheus:
-        base_url: "${PROMETHEUS_URL:-http://localhost:9090}"
+        base_url: "${PROMETHEUS_URL:-http://prometheus.mochat-observability.svc.cluster.local:9090}"
         verify_ssl: false
       loki:
-        base_url: "${LOKI_URL:-http://localhost:3100}"
+        base_url: "${LOKI_URL:-http://loki.mochat-observability.svc.cluster.local:3100}"
         auth_type: NoAuth
         verify_ssl: false
       tempo:
-        base_url: "${TEMPO_URL:-http://localhost:3200}"
+        base_url: "${TEMPO_URL:-http://tempo.mochat-observability.svc.cluster.local:3200}"
         verify_ssl: false
       kubernetes:
-        mode: kubeconfig
-        kubeconfig_path: "${KUBECONFIG:-~/.kube/config}"
+        mode: in_cluster
         namespaces: ["mochat"]
         verify_ssl: false
