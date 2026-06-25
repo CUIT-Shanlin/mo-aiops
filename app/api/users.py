@@ -6,6 +6,7 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError
 
 from app.api.alerts import require_project_id
 from app.audit.service import AuditService
@@ -13,7 +14,7 @@ from app.core.constants import ErrorCode
 from app.core.security import CurrentUser, get_current_user
 from app.models.user import User
 from app.repositories.audit import AuditLogRepository
-from app.repositories.users import UserRepository
+from app.repositories.users import UserCreate, UserRepository
 from app.schemas.response import APIError, success
 
 router = APIRouter(tags=["users"])
@@ -27,6 +28,22 @@ class BanRequest(BaseModel):
 
 class UnbanRequest(BaseModel):
     reason: str | None = None
+
+
+class CreateUserRequest(BaseModel):
+    id: str = Field(min_length=1, max_length=128)
+    username: str = Field(min_length=1, max_length=255)
+    email: str | None = None
+    avatar: str | None = None
+    riskLevel: str = "normal"
+    onlineStatus: str = "offline"
+
+
+class UpdateUserRequest(BaseModel):
+    username: str | None = Field(default=None, min_length=1, max_length=255)
+    email: str | None = None
+    avatar: str | None = None
+    riskLevel: str | None = None
 
 
 @router.get("/api/v1/users/stats")
@@ -94,6 +111,127 @@ async def get_user(
         data = _user_to_dict(user)
         await session.commit()
     return success(data)
+
+
+@router.post("/api/v1/users")
+async def create_user(
+    payload: CreateUserRequest,
+    request: Request,
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    project_id: Annotated[str, Depends(require_project_id)],
+) -> dict[str, Any]:
+    async with request.app.state.sessionmaker() as session:
+        repo = UserRepository(session, project_id)
+        await repo.ensure_admin()
+        try:
+            user = await repo.create(
+                UserCreate(
+                    id=payload.id,
+                    username=payload.username,
+                    email=payload.email,
+                    avatar=payload.avatar,
+                    online_status=payload.onlineStatus,
+                    risk_level=payload.riskLevel,
+                )
+            )
+        except IntegrityError as exc:
+            await session.rollback()
+            raise APIError(ErrorCode.VALIDATION_ERROR, "用户 ID 已存在") from exc
+        await AuditService(AuditLogRepository(session, project_id)).record(
+            operator_type="admin",
+            operator_name=current_user.user_id or current_user.role,
+            operator_uid=current_user.user_id,
+            action="USER_CREATE",
+            resource_type="user",
+            resource_id=payload.id,
+            after_state={
+                "userId": payload.id,
+                "username": payload.username,
+                "email": payload.email,
+                "avatar": payload.avatar,
+                "riskLevel": payload.riskLevel,
+            },
+            result="success",
+        )
+        data = _user_to_dict(user)
+        await session.commit()
+    return success(data)
+
+
+@router.put("/api/v1/users/{user_id}")
+async def update_user(
+    user_id: str,
+    payload: UpdateUserRequest,
+    request: Request,
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    project_id: Annotated[str, Depends(require_project_id)],
+) -> dict[str, Any]:
+    async with request.app.state.sessionmaker() as session:
+        repo = UserRepository(session, project_id)
+        await repo.ensure_admin()
+        before = await repo.get(user_id)
+        if before is None:
+            raise APIError(ErrorCode.NOT_FOUND, "用户不存在")
+        before_state = {
+            "username": before.username,
+            "email": before.email,
+            "avatar": before.avatar,
+            "riskLevel": before.risk_level,
+        }
+        user = await repo.update(
+            user_id,
+            username=payload.username,
+            email=payload.email,
+            avatar=payload.avatar,
+            risk_level=payload.riskLevel,
+        )
+        if user is None:
+            raise APIError(ErrorCode.NOT_FOUND, "用户不存在")
+        await AuditService(AuditLogRepository(session, project_id)).record(
+            operator_type="admin",
+            operator_name=current_user.user_id or current_user.role,
+            operator_uid=current_user.user_id,
+            action="USER_UPDATE",
+            resource_type="user",
+            resource_id=user_id,
+            before_state=before_state,
+            after_state={
+                "username": user.username,
+                "email": user.email,
+                "avatar": user.avatar,
+                "riskLevel": user.risk_level,
+            },
+            result="success",
+        )
+        data = _user_to_dict(user)
+        await session.commit()
+    return success(data)
+
+
+@router.delete("/api/v1/users/{user_id}")
+async def delete_user(
+    user_id: str,
+    request: Request,
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    project_id: Annotated[str, Depends(require_project_id)],
+) -> dict[str, Any]:
+    async with request.app.state.sessionmaker() as session:
+        repo = UserRepository(session, project_id)
+        await repo.ensure_admin()
+        deleted = await repo.delete(user_id)
+        if not deleted:
+            raise APIError(ErrorCode.NOT_FOUND, "用户不存在")
+        await AuditService(AuditLogRepository(session, project_id)).record(
+            operator_type="admin",
+            operator_name=current_user.user_id or current_user.role,
+            operator_uid=current_user.user_id,
+            action="USER_DELETE",
+            resource_type="user",
+            resource_id=user_id,
+            result="success",
+        )
+        await session.commit()
+    return success({"success": True})
 
 
 @router.post("/api/v1/users/{user_id}/ban")

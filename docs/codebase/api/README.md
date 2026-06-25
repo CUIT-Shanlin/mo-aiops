@@ -25,7 +25,10 @@
 
 - `auth.py` 的 login user 和 `/me` 返回 `avatar`、`email`、`permissions`。
 - `settings.py` 配置更新请求体支持 `reason`，真实 key 以前端从配置列表拿到的 key 为准。
+- `settings.py` 单配置项历史走 `GET /api/v1/settings/configs/{name}/history`，返回 `{value, changedBy, changedAt, reason}` 分页结构；全局历史 `GET /api/v1/settings/history` 仍保留，返回审计标准结构。
 - `alerts.py` 的 batch-suppress 接受字符串 ID 数组，非法 ID 返回参数错误。
+- `users.py` 支持完整 CRUD：`POST /api/v1/users`（创建，id 项目内唯一，重复 40022）、`PUT /api/v1/users/{id}`（部分更新，仅传字段被改）、`DELETE /api/v1/users/{id}`；三个写操作均记审计（`USER_CREATE`/`USER_UPDATE`/`USER_DELETE`）。
+- `logs.py` 已保存查询支持管理：`PUT /api/v1/logs/queries/{id}`（重命名，名称重复 40022）、`DELETE /api/v1/logs/queries/{id}`。
 - `metrics.py` series 接受 `timeRange`、`step`；`traces.py` 列表接受 `timeRange=1h|6h|24h`。
 
 ## 路由域

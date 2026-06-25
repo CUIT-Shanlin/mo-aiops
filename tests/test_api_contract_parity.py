@@ -43,9 +43,15 @@ def test_mvp_api_contract_routes_are_registered(app_instance):
         ("PUT", "/api/v1/notifications/{notification_id}/read"),
         ("GET", "/api/v1/users/stats"),
         ("GET", "/api/v1/users"),
+        ("POST", "/api/v1/users"),
         ("GET", "/api/v1/users/{user_id}"),
+        ("PUT", "/api/v1/users/{user_id}"),
+        ("DELETE", "/api/v1/users/{user_id}"),
         ("POST", "/api/v1/users/{user_id}/ban"),
         ("POST", "/api/v1/users/{user_id}/unban"),
+        ("PUT", "/api/v1/logs/queries/{query_id}"),
+        ("DELETE", "/api/v1/logs/queries/{query_id}"),
+        ("GET", "/api/v1/settings/configs/{name}/history"),
     }
 
     assert expected <= route_keys

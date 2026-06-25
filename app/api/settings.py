@@ -1,6 +1,7 @@
 """Settings REST API."""
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -11,6 +12,7 @@ from app.api.audit import _audit_to_dict
 from app.audit.service import AuditService
 from app.core.constants import ErrorCode
 from app.core.security import CurrentUser, get_current_user
+from app.models.audit_log import AuditLog
 from app.repositories.audit import AuditLogRepository
 from app.schemas.response import APIError, success
 from app.settings.service import SettingsService
@@ -130,8 +132,53 @@ async def settings_history(
     )
 
 
+@router.get("/api/v1/settings/configs/{name}/history")
+async def config_history(
+    name: str,
+    request: Request,
+    _current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    project_id: Annotated[str, Depends(require_project_id)],
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=200, alias="pageSize"),
+) -> dict[str, Any]:
+    service = _service(request, project_id)
+    definition = service.get_definition(name)
+    if definition is None:
+        raise APIError(ErrorCode.NOT_FOUND, "配置项不存在")
+    async with request.app.state.sessionmaker() as session:
+        page_result = await AuditLogRepository(session, project_id).search(
+            action="CONFIG_UPDATE",
+            resource_id=name,
+            page=page,
+            page_size=page_size,
+        )
+    return success(
+        {
+            "total": page_result.total,
+            "page": page_result.page,
+            "pageSize": page_result.size,
+            "items": [_config_history_to_dict(row) for row in page_result.items],
+        }
+    )
+
+
 def _service(request: Request, project_id: str) -> SettingsService:
     return SettingsService(request.app.state.redis, project_id)
+
+
+def _config_history_to_dict(row: AuditLog) -> dict[str, Any]:
+    value = row.after_state.get("value") if row.after_state else None
+    return {
+        "value": value,
+        "changedBy": row.operator_name,
+        "changedAt": _format_datetime(row.created_at),
+        "reason": row.reason,
+    }
+
+
+def _format_datetime(value: datetime) -> str:
+    utc_value = value.astimezone(UTC) if value.tzinfo else value.replace(tzinfo=UTC)
+    return utc_value.isoformat().replace("+00:00", "Z")
 
 
 async def _record_config_audit(

@@ -46,3 +46,25 @@ class SavedQueryRepository(ProjectScopedRepository):
             )
         )
         return list(result.scalars().all())
+
+    async def get(self, query_id: int) -> SavedQuery | None:
+        result = await self.session.execute(
+            self.scope(select(SavedQuery).where(SavedQuery.id == query_id))
+        )
+        return result.scalar_one_or_none()
+
+    async def update(self, query_id: int, *, name: str) -> SavedQuery | None:
+        row = await self.get(query_id)
+        if row is None:
+            return None
+        row.name = name
+        await self.session.flush()
+        return row
+
+    async def delete(self, query_id: int) -> bool:
+        row = await self.get(query_id)
+        if row is None:
+            return False
+        await self.session.delete(row)
+        await self.session.flush()
+        return True

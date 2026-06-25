@@ -135,6 +135,40 @@ class UserRepository(ProjectScopedRepository):
             "highRisk": high_risk,
         }
 
+    async def update(
+        self,
+        user_id: str | int,
+        *,
+        username: str | None = None,
+        email: str | None = None,
+        avatar: str | None = None,
+        risk_level: str | None = None,
+        online_status: str | None = None,
+    ) -> User | None:
+        row = await self.get(user_id)
+        if row is None:
+            return None
+        if username is not None:
+            row.username = username
+        if email is not None:
+            row.email = email
+        if avatar is not None:
+            row.avatar = avatar
+        if risk_level is not None:
+            row.risk_level = risk_level
+        if online_status is not None:
+            row.online_status = online_status
+        await self.session.flush()
+        return row
+
+    async def delete(self, user_id: str | int) -> bool:
+        row = await self.get(user_id)
+        if row is None:
+            return False
+        await self.session.delete(row)
+        await self.session.flush()
+        return True
+
     async def set_banned(self, user_id: str | int, is_banned: bool) -> User | None:
         row = await self.get(user_id)
         if row is None:

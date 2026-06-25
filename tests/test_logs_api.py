@@ -427,3 +427,156 @@ async def test_logs_api_rejects_disabled_project(
 
     assert response.status_code == 200
     assert response.json() == {"code": 40004, "message": "项目不存在", "data": None}
+
+
+async def test_update_saved_log_query_renames_and_reflects_in_list(
+    client, auth_headers, logs_projects_config
+):
+    saved = await client.post(
+        "/api/v1/logs/queries/save",
+        headers=auth_headers,
+        json={"name": "old-name", "params": {"keyword": "oom"}},
+    )
+    query_id = saved.json()["data"]["id"]
+
+    response = await client.put(
+        f"/api/v1/logs/queries/{query_id}",
+        headers=auth_headers,
+        json={"name": "new-name"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["code"] == 0
+    assert response.json()["data"]["id"] == query_id
+    assert response.json()["data"]["name"] == "new-name"
+    assert response.json()["data"]["params"] == {"keyword": "oom"}
+
+    listed = await client.get("/api/v1/logs/queries", headers=auth_headers)
+    names = [item["name"] for item in listed.json()["data"]]
+    assert "new-name" in names
+    assert "old-name" not in names
+
+
+async def test_update_saved_log_query_duplicate_name_rejected(
+    client, auth_headers, logs_projects_config
+):
+    first = await client.post(
+        "/api/v1/logs/queries/save",
+        headers=auth_headers,
+        json={"name": "taken", "params": {}},
+    )
+    second = await client.post(
+        "/api/v1/logs/queries/save",
+        headers=auth_headers,
+        json={"name": "other", "params": {}},
+    )
+    second_id = second.json()["data"]["id"]
+
+    response = await client.put(
+        f"/api/v1/logs/queries/{second_id}",
+        headers=auth_headers,
+        json={"name": "taken"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "code": 40022,
+        "message": "查询名称已存在",
+        "data": None,
+    }
+    unchanged = await client.get("/api/v1/logs/queries", headers=auth_headers)
+    by_id = {item["id"]: item for item in unchanged.json()["data"]}
+    assert by_id[second_id]["name"] == "other"
+    _ = first
+
+
+async def test_update_missing_saved_log_query_returns_not_found(
+    client, auth_headers, logs_projects_config
+):
+    response = await client.put(
+        "/api/v1/logs/queries/999999",
+        headers=auth_headers,
+        json={"name": "whatever"},
+    )
+
+    assert response.json() == {
+        "code": 40004,
+        "message": "已保存查询不存在",
+        "data": None,
+    }
+
+
+async def test_delete_saved_log_query_removes_from_list(
+    client, auth_headers, logs_projects_config
+):
+    saved = await client.post(
+        "/api/v1/logs/queries/save",
+        headers=auth_headers,
+        json={"name": "to-delete", "params": {}},
+    )
+    query_id = saved.json()["data"]["id"]
+
+    response = await client.delete(
+        f"/api/v1/logs/queries/{query_id}",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {"success": True}
+
+    listed = await client.get("/api/v1/logs/queries", headers=auth_headers)
+    ids = [item["id"] for item in listed.json()["data"]]
+    assert query_id not in ids
+
+
+async def test_delete_missing_saved_log_query_returns_not_found(
+    client, auth_headers, logs_projects_config
+):
+    response = await client.delete(
+        "/api/v1/logs/queries/999999",
+        headers=auth_headers,
+    )
+
+    assert response.json() == {
+        "code": 40004,
+        "message": "已保存查询不存在",
+        "data": None,
+    }
+
+
+async def test_saved_log_query_update_delete_is_project_scoped(
+    client, auth_headers, make_jwt, logs_projects_config
+):
+    stage_headers = {
+        "Authorization": f"Bearer {make_jwt(role='admin')}",
+        "X-Project-Id": "stage",
+    }
+    prod_saved = await client.post(
+        "/api/v1/logs/queries/save",
+        headers=auth_headers,
+        json={"name": "shared", "params": {"keyword": "prod"}},
+    )
+    stage_saved = await client.post(
+        "/api/v1/logs/queries/save",
+        headers=stage_headers,
+        json={"name": "shared", "params": {"keyword": "stage"}},
+    )
+    prod_id = prod_saved.json()["data"]["id"]
+    stage_id = stage_saved.json()["data"]["id"]
+
+    stage_rename = await client.put(
+        f"/api/v1/logs/queries/{stage_id}",
+        headers=stage_headers,
+        json={"name": "stage-renamed"},
+    )
+    assert stage_rename.json()["code"] == 0
+
+    stage_delete_prod = await client.delete(
+        f"/api/v1/logs/queries/{prod_id}",
+        headers=stage_headers,
+    )
+    assert stage_delete_prod.json()["code"] == 40004
+
+    prod_list = await client.get("/api/v1/logs/queries", headers=auth_headers)
+    prod_names = [item["name"] for item in prod_list.json()["data"]]
+    assert "shared" in prod_names

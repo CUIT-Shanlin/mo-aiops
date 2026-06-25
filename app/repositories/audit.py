@@ -138,6 +138,7 @@ class AuditLogRepository:
         keyword: str | None = None,
         operator_type: str | None = None,
         action: str | None = None,
+        resource_id: str | None = None,
         start_time: datetime | None = None,
         end_time: datetime | None = None,
         result: str | None = None,
@@ -160,6 +161,8 @@ class AuditLogRepository:
             filters.append(AuditLog.operator_type == operator_type)
         if action:
             filters.append(AuditLog.action == action)
+        if resource_id:
+            filters.append(AuditLog.resource_id == resource_id)
         if result:
             filters.append(AuditLog.result == result)
         if start_time:

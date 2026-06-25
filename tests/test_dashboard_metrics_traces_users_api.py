@@ -64,7 +64,6 @@ def test_dashboard_metrics_traces_users_routes_are_registered():
         "/api/v1/users/{user_id}/unban",
     } <= routes
 
-
 async def test_dashboard_routes_require_project_context(client, make_jwt, app_instance):
     _set_projects(app_instance)
     response = await client.get(

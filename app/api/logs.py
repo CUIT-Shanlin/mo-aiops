@@ -26,6 +26,10 @@ class SaveQueryRequest(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict)
 
 
+class UpdateSavedQueryRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+
+
 class ExportRequest(BaseModel):
     format: str = Field(min_length=1)
     params: dict[str, Any] = Field(default_factory=dict)
@@ -169,6 +173,44 @@ async def list_log_queries(
     async with request.app.state.sessionmaker() as session:
         rows = await SavedQueryRepository(session, project_id).list()
     return success([_saved_query_to_dict(row) for row in rows])
+
+
+@router.put("/api/v1/logs/queries/{query_id}")
+async def update_log_query(
+    query_id: int,
+    payload: UpdateSavedQueryRequest,
+    request: Request,
+    _current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    project_id: Annotated[str, Depends(require_project_id)],
+) -> dict[str, Any]:
+    async with request.app.state.sessionmaker() as session:
+        repo = SavedQueryRepository(session, project_id)
+        try:
+            row = await repo.update(query_id, name=payload.name)
+        except IntegrityError as exc:
+            await session.rollback()
+            raise APIError(ErrorCode.VALIDATION_ERROR, "查询名称已存在") from exc
+        if row is None:
+            raise APIError(ErrorCode.NOT_FOUND, "已保存查询不存在")
+        data = _saved_query_to_dict(row)
+        await session.commit()
+    return success(data)
+
+
+@router.delete("/api/v1/logs/queries/{query_id}")
+async def delete_log_query(
+    query_id: int,
+    request: Request,
+    _current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    project_id: Annotated[str, Depends(require_project_id)],
+) -> dict[str, Any]:
+    async with request.app.state.sessionmaker() as session:
+        repo = SavedQueryRepository(session, project_id)
+        deleted = await repo.delete(query_id)
+        if not deleted:
+            raise APIError(ErrorCode.NOT_FOUND, "已保存查询不存在")
+        await session.commit()
+    return success({"success": True})
 
 
 def _saved_query_to_dict(row: SavedQuery) -> dict[str, Any]:

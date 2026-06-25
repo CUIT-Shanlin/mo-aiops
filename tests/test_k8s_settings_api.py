@@ -1090,3 +1090,181 @@ async def test_high_risk_setting_update_requires_confirm(
         "message": "参数校验失败",
         "data": None,
     }
+
+
+async def test_config_history_returns_only_named_config_audits(
+    app_instance,
+    client,
+    auth_headers,
+    k8s_projects_config,
+):
+    async with app_instance.state.sessionmaker() as session:
+        session.add_all(
+            [
+                AuditLog(
+                    project_id="prod",
+                    operator_uid="u1",
+                    operator_type="admin",
+                    operator_name="admin",
+                    action="CONFIG_UPDATE",
+                    resource_type="config",
+                    resource_id="aiops.detect_interval_sec",
+                    before_state={"value": "60"},
+                    after_state={"value": "120"},
+                    result="success",
+                    reason="业务需求调整",
+                ),
+                AuditLog(
+                    project_id="prod",
+                    operator_uid="u1",
+                    operator_type="admin",
+                    operator_name="admin",
+                    action="CONFIG_UPDATE",
+                    resource_type="config",
+                    resource_id="aiops.detect_interval_sec",
+                    before_state={"value": "120"},
+                    after_state={"value": "180"},
+                    result="success",
+                    reason="再次调整",
+                ),
+                AuditLog(
+                    project_id="prod",
+                    operator_uid="u1",
+                    operator_type="admin",
+                    operator_name="admin",
+                    action="CONFIG_UPDATE",
+                    resource_type="config",
+                    resource_id="aiops.auto_heal_enabled",
+                    before_state={"value": "开启"},
+                    after_state={"value": "关闭"},
+                    result="success",
+                    reason="不应出现在结果中",
+                ),
+            ]
+        )
+        await session.commit()
+
+    response = await client.get(
+        "/api/v1/settings/configs/aiops.detect_interval_sec/history",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["code"] == 0
+    assert body["data"]["total"] == 2
+    items = body["data"]["items"]
+    assert all(
+        item["changedBy"] == "admin" and item["reason"] in {"业务需求调整", "再次调整"}
+        for item in items
+    )
+    values = [item["value"] for item in items]
+    assert "120" in values
+    assert "180" in values
+    assert all("changedAt" in item for item in items)
+    assert all(item["changedAt"].endswith("Z") for item in items)
+
+
+async def test_config_history_is_project_scoped(
+    app_instance,
+    client,
+    auth_headers,
+    make_jwt,
+    k8s_projects_config,
+):
+    stage_headers = {
+        "Authorization": f"Bearer {make_jwt(role='admin')}",
+        "X-Project-Id": "stage",
+    }
+    async with app_instance.state.sessionmaker() as session:
+        session.add_all(
+            [
+                AuditLog(
+                    project_id="prod",
+                    operator_uid="u1",
+                    operator_type="admin",
+                    operator_name="admin",
+                    action="CONFIG_UPDATE",
+                    resource_type="config",
+                    resource_id="aiops.detect_interval_sec",
+                    before_state={"value": "60"},
+                    after_state={"value": "120"},
+                    result="success",
+                ),
+                AuditLog(
+                    project_id="stage",
+                    operator_uid="u2",
+                    operator_type="admin",
+                    operator_name="stage-admin",
+                    action="CONFIG_UPDATE",
+                    resource_type="config",
+                    resource_id="aiops.detect_interval_sec",
+                    before_state={"value": "30"},
+                    after_state={"value": "45"},
+                    result="success",
+                ),
+            ]
+        )
+        await session.commit()
+
+    prod_response = await client.get(
+        "/api/v1/settings/configs/aiops.detect_interval_sec/history",
+        headers=auth_headers,
+    )
+    stage_response = await client.get(
+        "/api/v1/settings/configs/aiops.detect_interval_sec/history",
+        headers=stage_headers,
+    )
+
+    assert prod_response.json()["data"]["total"] == 1
+    assert prod_response.json()["data"]["items"][0]["changedBy"] == "admin"
+    assert prod_response.json()["data"]["items"][0]["value"] == "120"
+    assert stage_response.json()["data"]["total"] == 1
+    assert stage_response.json()["data"]["items"][0]["changedBy"] == "stage-admin"
+    assert stage_response.json()["data"]["items"][0]["value"] == "45"
+
+
+async def test_config_history_unknown_config_returns_not_found(
+    client,
+    auth_headers,
+    k8s_projects_config,
+):
+    response = await client.get(
+        "/api/v1/settings/configs/aiops.unknown/history",
+        headers=auth_headers,
+    )
+
+    assert response.json() == {"code": 40004, "message": "配置项不存在", "data": None}
+
+
+async def test_global_settings_history_still_returns_audit_shape(
+    app_instance,
+    client,
+    auth_headers,
+    k8s_projects_config,
+):
+    async with app_instance.state.sessionmaker() as session:
+        session.add(
+            AuditLog(
+                project_id="prod",
+                operator_uid="u1",
+                operator_type="admin",
+                operator_name="admin",
+                action="CONFIG_UPDATE",
+                resource_type="config",
+                resource_id="aiops.detect_interval_sec",
+                before_state={"value": "60"},
+                after_state={"value": "120"},
+                result="success",
+            )
+        )
+        await session.commit()
+
+    response = await client.get("/api/v1/settings/history", headers=auth_headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["code"] == 0
+    assert body["data"]["total"] == 1
+    assert body["data"]["items"][0]["action"] == "CONFIG_UPDATE"
+    assert body["data"]["items"][0]["targetResource"] == "aiops.detect_interval_sec"
