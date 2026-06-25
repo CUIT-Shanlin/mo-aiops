@@ -41,6 +41,8 @@ class RedisKey:
     WS_METRICS = "ws:metrics"         # M2 PubSub
     RECENT_ERRORS = "recent_errors"   # M2 日志采集（仅 ERROR/WARN，供 Agent 分析）
     RECENT_LOGS = "recent_logs"       # 全级别日志缓存，供前端日志检索页
+    TRACES = "traces"                 # 链路快照缓存，供 traces/topology 读路径兜底
+    METRICS_SNAPSHOT = "metrics:snapshot"  # 最新指标快照，供 dashboard/metrics 兜底
 
     @staticmethod
     def of(project_id: str, suffix: str) -> str:
