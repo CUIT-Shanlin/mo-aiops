@@ -383,6 +383,84 @@ projects:
 
 
 @pytest.mark.asyncio
+async def test_lifespan_exposes_k8s_provider_factory(monkeypatch, tmp_path):
+    from app.main import get_app
+
+    path = tmp_path / "projects.yaml"
+    path.write_text(
+        """
+default_project: demo
+projects:
+  demo:
+    name: Demo
+    datasources:
+      kubernetes:
+        mode: kubeconfig
+        kubeconfig_path: ~/.kube/config
+        namespaces: ["mochat"]
+        verify_ssl: false
+""".strip()
+    )
+
+    monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///tmp/test.db")
+    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379")
+    monkeypatch.setenv("JWT_SECRET", "secret")
+    monkeypatch.setenv("PROJECTS_CONFIG_PATH", str(path))
+    monkeypatch.setenv("STARTUP_PROVIDER_VALIDATION", "false")
+    monkeypatch.setenv("STARTUP_COLLECTOR_ENABLED", "false")
+    monkeypatch.setenv("STARTUP_INGEST_ENABLED", "false")
+    get_settings.cache_clear()
+
+    monkeypatch.setattr("app.main.ping_db", lambda *_args, **_kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr("app.main.ping_redis", lambda *_args, **_kwargs: asyncio.sleep(0, result=True))
+    monkeypatch.setattr("app.main.run_upgrade_head", lambda: None)
+
+    class _Engine:
+        async def dispose(self) -> None:
+            return None
+
+    monkeypatch.setattr("app.main.create_engine", lambda *_args, **_kwargs: _Engine())
+    monkeypatch.setattr("app.main.make_sessionmaker", lambda *_args, **_kwargs: object())
+
+    class _Redis:
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr("app.main.create_redis", lambda *_args, **_kwargs: _Redis())
+
+    created = []
+
+    class _Provider:
+        def __init__(self, project_id: str, datasource_type: str):
+            self.project_id = project_id
+            self.datasource_type = datasource_type
+            self.closed = False
+
+        async def close(self) -> None:
+            self.closed = True
+
+    def _create_provider(project_id, datasource_type, _config):
+        provider = _Provider(project_id, datasource_type)
+        created.append(provider)
+        return provider
+
+    monkeypatch.setattr("app.main.create_provider", _create_provider)
+
+    app = get_app()
+    async with app.router.lifespan_context(app):
+        factory = app.state.create_k8s_provider
+        project = app.state.projects_config.projects["demo"]
+        provider = factory("demo", project)
+        same_provider = factory("demo", project)
+
+    assert provider.project_id == "demo"
+    assert provider.datasource_type == "kubernetes"
+    assert same_provider is provider
+    assert created == [provider]
+    assert provider.closed is True
+
+
+@pytest.mark.asyncio
 async def test_lifespan_starts_and_stops_collector_when_enabled(monkeypatch, tmp_path):
     from app.main import get_app
 

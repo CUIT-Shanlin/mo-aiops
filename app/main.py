@@ -40,6 +40,8 @@ from app.core.projects import load_projects_config
 from app.core.redis import create_redis, ping_redis
 from app.db.migrate import run_upgrade_head
 from app.observability.metrics import MetricsMiddleware, MetricsRegistry
+from app.k8s.logs import K8sProviderNotConfiguredError
+from app.providers.factory import create_provider
 from app.providers.health import validate_configured_providers
 from app.schemas.response import APIError
 from app.ws.agent import router as agent_ws_router
@@ -60,6 +62,7 @@ async def lifespan(app: FastAPI):
     app.state.redis = create_redis(settings.redis_url, db=settings.redis_db)
     app.state.metric_window_store = MetricWindowStore()
     app.state.trace_cache = TraceCache()
+    app.state.k8s_providers = {}
 
     # 迁移走线程：env.py 在线模式用 asyncio.run() 建临时 loop，
     # 在已运行的 lifespan 事件循环里直接调会抛 RuntimeError。
@@ -72,6 +75,7 @@ async def lifespan(app: FastAPI):
         log.warning("redis ping failed at startup")
 
     app.state.projects_config = load_projects_config()
+    app.state.create_k8s_provider = _make_k8s_provider_factory(app)
     app.state.provider_health = {}
     if settings.startup_provider_validation:
         app.state.provider_health = await validate_configured_providers(
@@ -125,8 +129,29 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
 
+    k8s_providers = getattr(app.state, "k8s_providers", {})
+    for provider in k8s_providers.values():
+        await provider.close()
     await app.state.engine.dispose()
     await app.state.redis.aclose()
+
+
+def _make_k8s_provider_factory(app: FastAPI):
+    def _create_k8s_provider(project_id: str, project):
+        providers = app.state.k8s_providers
+        provider = providers.get(project_id)
+        if provider is not None:
+            return provider
+        config = project.datasource_configs.get("kubernetes")
+        if config is None:
+            raise K8sProviderNotConfiguredError(
+                f"k8s provider unavailable for project {project_id}"
+            )
+        provider = create_provider(project_id, "kubernetes", config)
+        providers[project_id] = provider
+        return provider
+
+    return _create_k8s_provider
 
 
 def get_app() -> FastAPI:
