@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
-from app.collectors.logs import collect_project_logs
+from app.collectors.logs import collect_project_logs, collect_project_recent_logs
 from app.collectors.metrics import collect_project_metrics
 from app.collectors.models import MetricsSnapshot, ProjectCollectionResult
 from app.collectors.traces import collect_project_traces
@@ -26,6 +26,7 @@ ProviderMap = dict[str, Any]
 ProviderFactory = Callable[[str, ProjectConfig], ProviderMap]
 MetricsCollector = Callable[..., Awaitable[Any]]
 LogsCollector = Callable[..., Awaitable[Any]]
+RecentLogsCollector = Callable[..., Awaitable[Any]]
 TracesCollector = Callable[..., Awaitable[Any]]
 
 
@@ -42,6 +43,7 @@ class CollectorScheduler:
         trace_cache: TraceCache | None = None,
         metrics_collector: MetricsCollector = collect_project_metrics,
         logs_collector: LogsCollector = collect_project_logs,
+        recent_logs_collector: RecentLogsCollector = collect_project_recent_logs,
         traces_collector: TracesCollector = collect_project_traces,
         interval_seconds: float = 15.0,
     ) -> None:
@@ -52,6 +54,7 @@ class CollectorScheduler:
         self.trace_cache = trace_cache or TraceCache()
         self.metrics_collector = metrics_collector
         self.logs_collector = logs_collector
+        self.recent_logs_collector = recent_logs_collector
         self.traces_collector = traces_collector
         self.interval_seconds = interval_seconds
         self._providers: dict[str, ProviderMap] = {}
@@ -110,6 +113,19 @@ class CollectorScheduler:
                 result.errors.append(f"logs: {exc.__class__.__name__}")
                 self._log.warning(
                     "logs collection failed for project %s",
+                    project_id,
+                    exc_info=exc,
+                )
+            try:
+                await self.recent_logs_collector(
+                    project_id=project_id,
+                    provider=loki,
+                    redis=self.redis,
+                )
+            except Exception as exc:
+                result.errors.append(f"recent_logs: {exc.__class__.__name__}")
+                self._log.warning(
+                    "recent logs collection failed for project %s",
                     project_id,
                     exc_info=exc,
                 )

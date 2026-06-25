@@ -11,6 +11,7 @@ from app.agent.nodes import AgentNodeContext
 from app.agent.state import AgentState
 from app.collectors.windows import MetricWindowStore, TraceCache
 from app.repositories.agent_runs import AgentRunCreate, AgentRunRepository
+from app.repositories.alerts import AlertEventRepository
 
 log = logging.getLogger("agent.runner")
 
@@ -42,6 +43,11 @@ class AgentRunner:
         self.trace_cache = trace_cache
         self.repo = AgentRunRepository(session, project_id)
 
+    async def _load_alert(self, alert_event_id: int):
+        return await AlertEventRepository(self.session, self.project_id).get(
+            alert_event_id
+        )
+
     async def run_once(
         self,
         *,
@@ -68,6 +74,7 @@ class AgentRunner:
                 metric_window_store=self.metric_window_store,
                 trace_cache=self.trace_cache,
                 session=self.session,
+                alert_loader=self._load_alert,
             )
             graph = await _maybe_await(build_agent_graph(context))
             final_state = await graph.ainvoke(initial_state)

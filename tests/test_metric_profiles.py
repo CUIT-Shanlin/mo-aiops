@@ -18,6 +18,30 @@ def test_java_runtime_memory_used_ratio_resolution():
     query = profile.resolve("runtime.memory_used_ratio")
     assert "jvm_memory_used_bytes" in query
     assert "jvm_memory_max_bytes" in query
+    assert "area='heap'" in query
+    assert "* 100" in query
+
+
+def test_java_sys_cpu_uses_process_cpu_usage_as_percent():
+    profile = get_profile("java")
+    query = profile.resolve("sys.cpu")
+    assert "process_cpu_usage" in query
+    assert "* 100" in query
+
+
+def test_java_sys_memory_is_percent_of_container_limit():
+    profile = get_profile("java")
+    query = profile.resolve("sys.memory")
+    assert "jvm_memory_used_bytes" in query
+    assert "jvm_memory_committed_bytes" in query
+    assert "* 100" in query
+
+
+def test_java_http_error_rate_returns_zero_when_no_5xx():
+    profile = get_profile("java")
+    query = profile.resolve("http.error_rate")
+    assert "or vector(0)" in query
+    assert "clamp_min" in query
 
 
 def test_resolve_many_keeps_canonical_keys():

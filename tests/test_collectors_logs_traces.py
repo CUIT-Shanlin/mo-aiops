@@ -2,7 +2,11 @@ import json
 
 import pytest
 
-from app.collectors.logs import collect_project_logs, normalize_loki_streams
+from app.collectors.logs import (
+    collect_project_logs,
+    collect_project_recent_logs,
+    normalize_loki_streams,
+)
 from app.collectors.traces import collect_project_traces, normalize_tempo_trace
 from app.collectors.windows import TraceCache
 from app.core.constants import RedisKey
@@ -244,6 +248,75 @@ async def test_collect_project_logs_skips_bad_loki_items_and_keeps_good_entries(
     assert [entry.traceId for entry in entries] == ["trace-2"]
     assert trace_ids == {"trace-2"}
     assert redis.calls[0][1][0]["message"] == "slow"
+
+
+class FakeAllLevelLokiProvider:
+    def __init__(self):
+        self.queries = []
+
+    async def query(self, **kwargs):
+        self.queries.append(kwargs.get("query"))
+        return {
+            "data": {
+                "result": [
+                    {
+                        "stream": {"service": "api", "level": "INFO"},
+                        "values": [
+                            ["1781623482000000000", '{"message":"started ok"}'],
+                        ],
+                    }
+                ]
+            }
+        }
+
+
+async def test_collect_project_recent_logs_writes_all_level_cache():
+    redis = FakeRedis()
+    provider = FakeAllLevelLokiProvider()
+
+    entries = await collect_project_recent_logs(
+        project_id="demo",
+        provider=provider,
+        redis=redis,
+    )
+
+    assert [entry.level for entry in entries] == ["INFO"]
+    # all-level query must not constrain level to ERROR/WARN
+    assert "ERROR" not in (provider.queries[0] or "")
+    assert "WARN" not in (provider.queries[0] or "")
+    # default query must scope to the project
+    assert 'project_id="demo"' in (provider.queries[0] or "")
+    assert redis.calls[0][0] == RedisKey.of("demo", RedisKey.RECENT_LOGS)
+    assert redis.calls[0][1][0]["message"] == "started ok"
+    assert redis.calls[0][2] == 600
+
+
+async def test_collect_project_logs_default_query_scopes_project_and_levels():
+    redis = FakeRedis()
+    provider = FakeAllLevelLokiProvider()
+
+    await collect_project_logs(
+        project_id="demo",
+        provider=provider,
+        redis=redis,
+    )
+
+    query = provider.queries[0] or ""
+    assert 'project_id="demo"' in query
+    assert 'level=~"ERROR|WARN"' in query
+
+
+async def test_collect_project_recent_logs_raises_query_errors_without_clearing_cache():
+    redis = FakeRedis()
+
+    with pytest.raises(RuntimeError, match="loki unavailable"):
+        await collect_project_recent_logs(
+            project_id="demo",
+            provider=FakeFailingLokiProvider(),
+            redis=redis,
+        )
+
+    assert redis.calls == []
 
 
 def test_normalize_tempo_trace_extracts_spans():

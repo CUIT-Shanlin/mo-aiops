@@ -64,7 +64,7 @@ async def metric_categories(
                     {
                         "category": category,
                         "name": name,
-                        "value": str(values.get(canonical, 0)),
+                        "value": _format_value(values.get(canonical, 0)),
                         "unit": unit,
                         "status": _metric_status(values.get(canonical, 0), threshold),
                         "trend": 0,
@@ -88,7 +88,7 @@ async def metric_series(
     step: str | None = Query(default=None),
 ) -> dict[str, Any]:
     _ = (time_range, step)
-    value = _latest_metrics(request, project_id).get(name, 0)
+    value = round(float(_latest_metrics(request, project_id).get(name, 0)), 2)
     return success([{"time": datetime.now(UTC).strftime("%H:%M"), "value": value, "baseline": value}])
 
 
@@ -97,6 +97,14 @@ def _latest_metrics(request: Request, project_id: str) -> dict[str, float]:
     if not isinstance(store, MetricWindowStore):
         return {}
     return {sample.canonicalName: sample.value for sample in store.snapshot(project_id)}
+
+
+def _format_value(value: float) -> str:
+    """保留两位小数；整数值去掉多余的 .0 后缀。"""
+    rounded = round(float(value), 2)
+    if rounded == int(rounded):
+        return str(int(rounded))
+    return f"{rounded:.2f}"
 
 
 def _metric_status(value: float, threshold: int | None) -> str:

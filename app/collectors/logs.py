@@ -9,6 +9,8 @@ from app.core.constants import RedisKey
 
 RECENT_ERRORS_TTL_SECONDS = 600
 RECENT_ERRORS_LIMIT = 100
+RECENT_LOGS_TTL_SECONDS = 600
+RECENT_LOGS_LIMIT = 300
 
 
 class LokiProvider(Protocol):
@@ -103,9 +105,14 @@ async def collect_project_logs(
     project_id: str,
     provider: LokiProvider,
     redis: RedisClient,
-    query: str = '{level=~"ERROR|WARN"}',
+    query: str | None = None,
 ) -> tuple[list[LogEntry], set[str]]:
-    """采集最近 ERROR/WARN 日志，写入 Redis 最近错误缓存。"""
+    """采集最近 ERROR/WARN 日志，写入 Redis 最近错误缓存。
+
+    默认按 `project_id` 标签 scope，避免抓到其他项目/命名空间的日志。
+    """
+    if query is None:
+        query = f'{{project_id="{project_id}",level=~"ERROR|WARN"}}'
     payload = await provider.query(query=query, limit=RECENT_ERRORS_LIMIT)
     entries = normalize_loki_streams(payload)[:RECENT_ERRORS_LIMIT]
     await redis.set(
@@ -115,3 +122,28 @@ async def collect_project_logs(
     )
     trace_ids = {entry.traceId for entry in entries if entry.traceId}
     return entries, trace_ids
+
+
+async def collect_project_recent_logs(
+    *,
+    project_id: str,
+    provider: LokiProvider,
+    redis: RedisClient,
+    query: str | None = None,
+) -> list[LogEntry]:
+    """采集最近全级别日志，写入 Redis 全级别缓存，供前端日志检索页使用。
+
+    与 `collect_project_logs` 不同：不按 level 过滤，覆盖 DEBUG/INFO/WARN/ERROR，
+    供 `/api/v1/logs/*` 检索；Agent 分析仍只消费 ERROR/WARN 的 recent_errors。
+    默认按 `project_id` 标签 scope，避免抓到其他项目/命名空间的日志。
+    """
+    if query is None:
+        query = f'{{project_id="{project_id}"}}'
+    payload = await provider.query(query=query, limit=RECENT_LOGS_LIMIT)
+    entries = normalize_loki_streams(payload)[:RECENT_LOGS_LIMIT]
+    await redis.set(
+        RedisKey.of(project_id, RedisKey.RECENT_LOGS),
+        json.dumps([entry.model_dump() for entry in entries], ensure_ascii=False),
+        ex=RECENT_LOGS_TTL_SECONDS,
+    )
+    return entries

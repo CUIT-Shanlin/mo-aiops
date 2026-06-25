@@ -39,7 +39,8 @@ class RedisKey:
     WS_AGENT = "ws:agent"             # M5 PubSub
     WS_HEAL = "ws:heal"               # M5 PubSub
     WS_METRICS = "ws:metrics"         # M2 PubSub
-    RECENT_ERRORS = "recent_errors"   # M2 日志采集
+    RECENT_ERRORS = "recent_errors"   # M2 日志采集（仅 ERROR/WARN，供 Agent 分析）
+    RECENT_LOGS = "recent_logs"       # 全级别日志缓存，供前端日志检索页
 
     @staticmethod
     def of(project_id: str, suffix: str) -> str:

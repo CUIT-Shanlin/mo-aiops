@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import math
 from typing import Any, Iterable, Protocol
 
@@ -7,6 +8,8 @@ from app.collectors.models import MetricSample
 from app.collectors.windows import MetricWindowStore
 from app.core.projects import ProjectConfig
 from app.metrics_profile import get_profile
+
+log = logging.getLogger("collectors.metrics")
 
 
 class PrometheusProvider(Protocol):
@@ -73,10 +76,22 @@ async def collect_project_metrics(
         promql = profile.resolve(canonical_name)
         try:
             payload = await provider.query(query_type="instant", query=promql)
-        except Exception:
+        except Exception as exc:
+            log.warning(
+                "prometheus query failed for %s (%s): %s",
+                canonical_name,
+                project_id,
+                exc,
+            )
             continue
         value = extract_prometheus_value(payload)
         if value is None:
+            log.warning(
+                "prometheus query returned no value for %s (%s): query=%s",
+                canonical_name,
+                project_id,
+                promql,
+            )
             continue
         samples.append(window_store.add(project_id, canonical_name, value))
 

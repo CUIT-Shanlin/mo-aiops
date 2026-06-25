@@ -52,6 +52,10 @@ async def fake_logs_collector(**kwargs):
     return [], set()
 
 
+async def fake_recent_logs_collector(**kwargs):
+    return []
+
+
 async def fake_traces_collector(**kwargs):
     return {}
 
@@ -76,6 +80,7 @@ async def test_scheduler_collect_once_iterates_enabled_projects_and_publishes_me
         provider_factory=fake_provider_factory,
         metrics_collector=fake_metrics_collector,
         logs_collector=fake_logs_collector,
+        recent_logs_collector=fake_recent_logs_collector,
         traces_collector=fake_traces_collector,
     )
 
@@ -109,6 +114,7 @@ async def test_scheduler_keeps_other_projects_when_one_fails():
         provider_factory=fake_provider_factory,
         metrics_collector=failing_metrics_collector,
         logs_collector=fake_logs_collector,
+        recent_logs_collector=fake_recent_logs_collector,
         traces_collector=fake_traces_collector,
     )
 
@@ -141,6 +147,7 @@ async def test_scheduler_keeps_other_projects_when_provider_factory_fails():
         provider_factory=partially_failing_provider_factory,
         metrics_collector=fake_metrics_collector,
         logs_collector=fake_logs_collector,
+        recent_logs_collector=fake_recent_logs_collector,
         traces_collector=fake_traces_collector,
     )
 
@@ -167,6 +174,7 @@ async def test_scheduler_records_publish_failure_and_keeps_other_projects():
         provider_factory=fake_provider_factory,
         metrics_collector=fake_metrics_collector,
         logs_collector=fake_logs_collector,
+        recent_logs_collector=fake_recent_logs_collector,
         traces_collector=fake_traces_collector,
     )
 

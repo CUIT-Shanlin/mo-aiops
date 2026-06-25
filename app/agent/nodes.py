@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -9,6 +10,8 @@ from app.agent.rag import SimilarCaseQuery, SimilarCaseService
 from app.agent.state import AgentState
 from app.collectors.windows import MetricWindowStore, TraceCache
 from app.core.constants import RedisKey
+
+log = logging.getLogger("agent.nodes")
 
 
 @dataclass(slots=True)
@@ -19,6 +22,7 @@ class AgentNodeContext:
     session: Any | None = None
     llm_client: Any | None = None
     similar_case_service: Any | None = None
+    alert_loader: Any | None = None
 
 
 def _now_iso() -> str:
@@ -269,28 +273,35 @@ async def anomaly_detect_node(
     state: AgentState,
     context: AgentNodeContext,
 ) -> dict[str, Any]:
-    del context
+    alert = await _load_linked_alert(state, context)
+    alert_anomaly = alert is not None and _alert_is_active(alert)
     anomaly_detected = (
-        any(item.get("is_anomaly") for item in state.metrics_evidence)
+        alert_anomaly
+        or any(item.get("is_anomaly") for item in state.metrics_evidence)
         or any((item.get("level") or "").upper() == "ERROR" for item in state.logs_evidence)
         or any(
             item.get("is_error") or item.get("is_slow")
             for item in state.traces_evidence
         )
     )
-    severity = _determine_severity(state, anomaly_detected)
+    severity = _determine_severity(state, anomaly_detected, alert)
     confidence = 0.0 if not anomaly_detected else min(
         95.0,
         55.0
         + 15.0 * bool(state.metrics_evidence)
         + 15.0 * bool(state.logs_evidence)
-        + 10.0 * bool(state.traces_evidence),
+        + 10.0 * bool(state.traces_evidence)
+        + (10.0 if alert_anomaly else 0.0),
     )
+    fault_service = _alert_service(alert) if alert_anomaly else None
+    anomaly_type = _alert_name(alert) if alert_anomaly else None
 
     return {
         "anomaly_detected": anomaly_detected,
         "severity": severity,
         "confidence": confidence,
+        "fault_service": fault_service,
+        "anomaly_type": anomaly_type,
         "node_states": _merge_node_state(
             state,
             "anomaly_detect_node",
@@ -305,12 +316,39 @@ async def anomaly_detect_node(
     }
 
 
+async def _load_linked_alert(state: AgentState, context: AgentNodeContext):
+    if state.alert_event_id is None or context.alert_loader is None:
+        return None
+    try:
+        return await context.alert_loader(state.alert_event_id)
+    except Exception:
+        log.warning("failed to load linked alert %s", state.alert_event_id, exc_info=True)
+        return None
+
+
+def _alert_is_active(alert: Any) -> bool:
+    status = str(getattr(alert, "status", "") or "").lower()
+    return status in {"firing", "active", "acknowledged", "suppressed"}
+
+
+def _alert_service(alert: Any) -> str | None:
+    return getattr(alert, "service", None)
+
+
+def _alert_name(alert: Any) -> str | None:
+    return getattr(alert, "name", None)
+
+
 def _determine_severity(
     state: AgentState,
     anomaly_detected: bool,
+    alert: Any | None = None,
 ) -> str:
     if not anomaly_detected:
         return "info"
+    alert_severity = str(getattr(alert, "severity", "") or "").lower()
+    if alert_severity == "critical":
+        return "critical"
     if any(
         (item.get("level") or "").upper() == "ERROR"
         for item in state.logs_evidence
@@ -373,8 +411,8 @@ async def root_cause_node(
     context: AgentNodeContext,
 ) -> dict[str, Any]:
     del context
-    fault_service = _pick_fault_service(state)
-    anomaly_type = _pick_anomaly_type(state)
+    fault_service = state.fault_service or _pick_fault_service(state)
+    anomaly_type = state.anomaly_type or _pick_anomaly_type(state)
     summary = _root_cause_summary(
         service=fault_service,
         anomaly_type=anomaly_type,

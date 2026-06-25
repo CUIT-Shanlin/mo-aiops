@@ -4,7 +4,6 @@ from app.collectors.metrics import collect_project_metrics, extract_prometheus_v
 from app.collectors.windows import MetricWindowStore
 from app.core.projects import ProjectConfig
 
-
 class FakePrometheusProvider:
     def __init__(self):
         self.queries = []
@@ -106,10 +105,10 @@ async def test_collect_project_metrics_resolves_canonical_promql():
     ]
     assert [sample.value for sample in samples] == [42.5, 42.5]
     assert provider.queries == [
-        {"query_type": "instant", "query": "sum(rate(process_cpu_seconds_total{namespace='mochat'}[5m]))"},
+        {"query_type": "instant", "query": "avg(process_cpu_usage{namespace='mochat'}) * 100"},
         {
             "query_type": "instant",
-            "query": "sum(jvm_memory_used_bytes{namespace='mochat'}) / sum(jvm_memory_max_bytes{namespace='mochat'})",
+            "query": "sum(jvm_memory_used_bytes{namespace='mochat',area='heap'}) / sum(jvm_memory_max_bytes{namespace='mochat',area='heap'}) * 100",
         },
     ]
 
@@ -132,10 +131,10 @@ async def test_collect_project_metrics_skips_bad_payload_and_continues():
     ]
     assert [sample.value for sample in samples] == [8.5]
     assert provider.queries == [
-        {"query_type": "instant", "query": "sum(rate(process_cpu_seconds_total{namespace='mochat'}[5m]))"},
+        {"query_type": "instant", "query": "avg(process_cpu_usage{namespace='mochat'}) * 100"},
         {
             "query_type": "instant",
-            "query": "sum(jvm_memory_used_bytes{namespace='mochat'}) / sum(jvm_memory_max_bytes{namespace='mochat'})",
+            "query": "sum(jvm_memory_used_bytes{namespace='mochat',area='heap'}) / sum(jvm_memory_max_bytes{namespace='mochat',area='heap'}) * 100",
         },
     ]
 
@@ -158,9 +157,46 @@ async def test_collect_project_metrics_skips_failed_query_and_continues():
     ]
     assert [sample.value for sample in samples] == [7.5]
     assert provider.queries == [
-        {"query_type": "instant", "query": "sum(rate(process_cpu_seconds_total{namespace='mochat'}[5m]))"},
+        {"query_type": "instant", "query": "avg(process_cpu_usage{namespace='mochat'}) * 100"},
         {
             "query_type": "instant",
-            "query": "sum(jvm_memory_used_bytes{namespace='mochat'}) / sum(jvm_memory_max_bytes{namespace='mochat'})",
+            "query": "sum(jvm_memory_used_bytes{namespace='mochat',area='heap'}) / sum(jvm_memory_max_bytes{namespace='mochat',area='heap'}) * 100",
         },
     ]
+
+
+async def test_collect_project_metrics_warns_on_query_failure(caplog):
+    provider = FailingThenSuccessfulPrometheusProvider()
+    store = MetricWindowStore(min_samples=10)
+    project = ProjectConfig(name="Demo", metric_profile="java")
+
+    with caplog.at_level("WARNING", logger="collectors.metrics"):
+        await collect_project_metrics(
+            project_id="demo",
+            project=project,
+            provider=provider,
+            window_store=store,
+            canonical_metrics=["sys.cpu", "runtime.memory_used_ratio"],
+        )
+
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert any("sys.cpu" in r.getMessage() for r in warnings)
+    assert any("prometheus unavailable" in r.getMessage() for r in warnings)
+
+
+async def test_collect_project_metrics_warns_on_empty_result(caplog):
+    provider = BadPayloadThenSuccessfulPrometheusProvider()
+    store = MetricWindowStore(min_samples=10)
+    project = ProjectConfig(name="Demo", metric_profile="java")
+
+    with caplog.at_level("WARNING", logger="collectors.metrics"):
+        await collect_project_metrics(
+            project_id="demo",
+            project=project,
+            provider=provider,
+            window_store=store,
+            canonical_metrics=["sys.cpu", "runtime.memory_used_ratio"],
+        )
+
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert any("sys.cpu" in r.getMessage() and "no value" in r.getMessage() for r in warnings)

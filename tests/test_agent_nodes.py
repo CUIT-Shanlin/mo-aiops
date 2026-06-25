@@ -245,3 +245,86 @@ async def test_rag_retrieve_infers_query_before_root_cause_node():
     assert update["rag_results"][0]["caseId"] == "case-1"
     assert fake_service.queries[0].alert_type == "OOMKilled"
     assert fake_service.queries[0].service == "message-service"
+
+
+class FakeAlert:
+    def __init__(self, *, id, name, service, severity, status):
+        self.id = id
+        self.name = name
+        self.service = service
+        self.severity = severity
+        self.status = status
+
+
+async def test_anomaly_detect_treats_linked_active_alert_as_anomaly():
+    async def loader(alert_id):
+        return FakeAlert(
+            id=alert_id,
+            name="HighCPU",
+            service="message-service",
+            severity="critical",
+            status="firing",
+        )
+
+    state = AgentState(
+        project_id="prod",
+        trigger_source="alert",
+        alert_event_id=42,
+    )
+    context = AgentNodeContext(
+        redis=FakeRedis(),
+        metric_window_store=MetricWindowStore(),
+        trace_cache=TraceCache(),
+        alert_loader=loader,
+    )
+
+    update = await anomaly_detect_node(state, context)
+
+    assert update["anomaly_detected"] is True
+    assert update["severity"] == "critical"
+    assert update["fault_service"] == "message-service"
+    assert update["anomaly_type"] == "HighCPU"
+
+
+async def test_anomaly_detect_ignores_resolved_linked_alert():
+    async def loader(alert_id):
+        return FakeAlert(
+            id=alert_id,
+            name="HighCPU",
+            service="message-service",
+            severity="warning",
+            status="resolved",
+        )
+
+    state = AgentState(
+        project_id="prod",
+        trigger_source="alert",
+        alert_event_id=42,
+    )
+    context = AgentNodeContext(
+        redis=FakeRedis(),
+        metric_window_store=MetricWindowStore(),
+        trace_cache=TraceCache(),
+        alert_loader=loader,
+    )
+
+    update = await anomaly_detect_node(state, context)
+
+    assert update["anomaly_detected"] is False
+
+
+async def test_anomaly_detect_without_alert_loader_falls_back_to_evidence():
+    state = AgentState(
+        project_id="prod",
+        trigger_source="manual",
+        metrics_evidence=[{"is_anomaly": True, "metric": "sys.cpu", "value": 99}],
+    )
+    context = AgentNodeContext(
+        redis=FakeRedis(),
+        metric_window_store=MetricWindowStore(),
+        trace_cache=TraceCache(),
+    )
+
+    update = await anomaly_detect_node(state, context)
+
+    assert update["anomaly_detected"] is True

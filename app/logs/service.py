@@ -105,7 +105,14 @@ class LogsService:
         ]
 
     async def _read_recent_logs(self, project_id: str) -> list[dict[str, Any]]:
-        key = RedisKey.of(project_id, RedisKey.RECENT_ERRORS)
+        key = RedisKey.of(project_id, RedisKey.RECENT_LOGS)
+        logs = await self._read_key(key)
+        if logs:
+            return logs
+        # 回退到 ERROR/WARN 缓存，兼容仅有 recent_errors 的旧数据
+        return await self._read_key(RedisKey.of(project_id, RedisKey.RECENT_ERRORS))
+
+    async def _read_key(self, key: str) -> list[dict[str, Any]]:
         try:
             raw = await self.redis.get(key)
         except Exception:

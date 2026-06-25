@@ -113,6 +113,29 @@ async def test_dashboard_and_metrics_return_mvp_shapes(client, make_jwt, app_ins
     assert metric_series.json()["data"][0].keys() >= {"time", "value", "baseline"}
 
 
+async def test_metric_categories_value_keeps_two_decimals(
+    client, make_jwt, app_instance
+):
+    await _clean(app_instance)
+    _set_projects(app_instance)
+    app_instance.state.metric_window_store.add("prod", "sys.cpu", 0.0761296)
+    app_instance.state.metric_window_store.add("prod", "sys.memory", 75.235641)
+    app_instance.state.metric_window_store.add("prod", "msg.throughput", 12600)
+    headers = _headers(make_jwt(role="admin"))
+
+    categories = await client.get("/api/v1/metrics/categories", headers=headers)
+
+    values = {
+        metric["name"]: metric["value"]
+        for category in categories.json()["data"]
+        for metric in category["metrics"]
+    }
+    assert values["CPU 使用率"] == "0.08"
+    assert values["内存使用率"] == "75.24"
+    # 整数值不带多余小数
+    assert values["消息 TPS"] == "12600"
+
+
 async def test_traces_routes_read_project_trace_cache(client, make_jwt, app_instance):
     _set_projects(app_instance)
     app_instance.state.trace_cache.put(

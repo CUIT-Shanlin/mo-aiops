@@ -162,10 +162,11 @@ def _latest_metrics(request: Request, project_id: str) -> dict[str, float]:
 
 
 def _series(title: str, chart_type: str, value: float) -> dict[str, Any]:
+    rounded = round(float(value), 2)
     return {
         "title": title,
         "type": chart_type,
-        "data": [{"time": _short_time(), "value": value, "baseline": value}],
+        "data": [{"time": _short_time(), "value": rounded, "baseline": rounded}],
     }
 
 
