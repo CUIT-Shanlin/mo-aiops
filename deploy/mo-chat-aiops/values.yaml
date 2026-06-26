@@ -101,8 +101,8 @@ env:
   ADMIN_USERNAME: admin
   ADMIN_PASSWORD_HASH: plain:admin
   PROJECTS_CONFIG_PATH: /etc/mo-chat-aiops/projects.yaml
-  STARTUP_PROVIDER_VALIDATION: "true"
-  STARTUP_COLLECTOR_ENABLED: "true"
+  STARTUP_PROVIDER_VALIDATION: "false"
+  STARTUP_COLLECTOR_ENABLED: "false"  # 演示数据由 app.seeds.run 注入，关采集器避免覆盖
   STARTUP_INGEST_ENABLED: "true"
   LLM_PROVIDER: openai
   LLM_BASE_URL: https://api.deepseek.com/v1
