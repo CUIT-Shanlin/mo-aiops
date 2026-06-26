@@ -289,6 +289,7 @@ class SeedService:
             alert.agent_run_id = run.id
             runs.append(run)
         return runs
+
     async def _seed_heal_actions(
         self,
         project_id: str,

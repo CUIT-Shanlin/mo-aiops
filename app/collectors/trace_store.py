@@ -36,7 +36,14 @@ def deserialize_traces(raw: Any) -> list[tuple[str, list[SpanSummary]]]:
         spans_raw = item.get("spans")
         if not trace_id or not isinstance(spans_raw, list):
             continue
-        spans = [SpanSummary(**span) for span in spans_raw if isinstance(span, dict)]
+        spans: list[SpanSummary] = []
+        for span in spans_raw:
+            if not isinstance(span, dict):
+                continue
+            try:
+                spans.append(SpanSummary(**span))
+            except Exception:
+                pass
         result.append((trace_id, spans))
     return result
 

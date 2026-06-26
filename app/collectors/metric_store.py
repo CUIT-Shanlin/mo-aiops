@@ -49,4 +49,10 @@ async def load_metric_values(
         return {}
     if not isinstance(parsed, dict):
         return {}
-    return {str(name): float(value) for name, value in parsed.items()}
+    result: dict[str, float] = {}
+    for name, value in parsed.items():
+        try:
+            result[str(name)] = float(value)
+        except (ValueError, TypeError):
+            pass
+    return result

@@ -35,3 +35,11 @@ async def test_load_bad_value_returns_empty():
     redis = FakeRedis()
     redis.store[RedisKey.of("mochat-prod", RedisKey.METRICS_SNAPSHOT)] = "not-json"
     assert await load_metric_values(redis, None, "mochat-prod") == {}
+
+
+async def test_load_skips_non_numeric_values():
+    redis = FakeRedis()
+    import json
+    redis.store[RedisKey.of("mochat-prod", RedisKey.METRICS_SNAPSHOT)] = json.dumps({"good": 5.0, "bad": "abc"})
+    result = await load_metric_values(redis, None, "mochat-prod")
+    assert result == {"good": 5.0}

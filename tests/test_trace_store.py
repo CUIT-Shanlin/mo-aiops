@@ -59,3 +59,21 @@ async def test_load_prefers_memory_over_redis():
     cache.put("mochat-prod", "mem-trace", _spans())
     loaded = await load_trace_snapshot(redis, cache, "mochat-prod")
     assert [tid for tid, _ in loaded] == ["mem-trace"]
+
+
+def test_deserialize_skips_bad_span():
+    raw = json.dumps([
+        {
+            "traceId": "t1",
+            "spans": [
+                {"spanId": "s1", "service": "a", "name": "n", "durationMs": 1.0, "traceId": "t1"},
+                {"bogus": True},
+            ],
+        }
+    ])
+    result = deserialize_traces(raw)
+    assert len(result) == 1
+    trace_id, spans = result[0]
+    assert trace_id == "t1"
+    assert len(spans) == 1
+    assert spans[0].spanId == "s1"
