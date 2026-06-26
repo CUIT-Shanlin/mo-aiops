@@ -583,3 +583,44 @@ async def test_topology_rejects_unknown_project(client, make_jwt, topology_proje
 
     assert response.status_code == 200
     assert response.json() == {"code": 40004, "message": "项目不存在", "data": None}
+
+
+async def test_topology_graph_rejects_disabled_project(client, make_jwt, topology_projects):
+    response = await client.get(
+        "/api/v1/topology/graph",
+        headers={
+            "Authorization": f"Bearer {make_jwt(role='admin')}",
+            "X-Project-Id": "disabled",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"code": 40004, "message": "项目不存在", "data": None}
+
+
+async def test_topology_graph_rebuilds_from_redis_traces(client, make_jwt, app_instance, topology_projects):
+    from app.collectors.trace_store import save_trace_snapshot
+
+    # 内存 trace_cache 空；topology cache 不预热；只写 Redis traces
+    await save_trace_snapshot(
+        app_instance.state.redis,
+        "prod",
+        [
+            (
+                "t1",
+                [
+                    SpanSummary(traceId="t1", spanId="s1", service="access-gateway", name="recv", durationMs=10),
+                    SpanSummary(traceId="t1", spanId="s2", parentSpanId="s1", service="api-service", name="route", durationMs=20, status="error"),
+                ],
+            )
+        ],
+    )
+    # 清掉可能存在的 topology 缓存，强制重建
+    await app_instance.state.redis.delete(RedisKey.of("prod", RedisKey.TOPOLOGY_CACHE))
+
+    headers = {"Authorization": f"Bearer {make_jwt(role='admin')}", "X-Project-Id": "prod"}
+    resp = await client.get("/api/v1/topology/graph", headers=headers)
+    data = resp.json()["data"]
+    node_ids = {node["id"] for node in data["nodes"]}
+    assert {"access-gateway", "api-service"} <= node_ids
+    assert any(edge["from"] == "access-gateway" and edge["to"] == "api-service" for edge in data["edges"])

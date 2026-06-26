@@ -6,7 +6,8 @@ from collections import defaultdict
 from copy import deepcopy
 from typing import Any, Iterable
 
-from app.collectors.models import MetricSample
+from app.collectors.models import MetricSample, SpanSummary
+from app.collectors.trace_store import load_trace_snapshot
 from app.collectors.windows import MetricWindowStore, TraceCache
 from app.core.constants import RedisKey
 
@@ -38,7 +39,8 @@ class TopologyService:
         """Return nodes and edges for the project topology."""
         base_graph = await self._load_base_graph(project_id)
         if base_graph is None:
-            base_graph = self._build_base_graph(project_id)
+            snapshot = await load_trace_snapshot(self.redis, self.trace_cache, project_id)
+            base_graph = self._build_base_graph(snapshot)
             await self._cache_base_graph(project_id, base_graph)
         graph = self._with_alert_counts(base_graph, alert_counts or {})
         graph = self._apply_filter(graph, graph_filter)
@@ -54,7 +56,8 @@ class TopologyService:
         """Return one service node plus its immediate upstream/downstream edges."""
         base_graph = await self._load_base_graph(project_id)
         if base_graph is None:
-            base_graph = self._build_base_graph(project_id)
+            snapshot = await load_trace_snapshot(self.redis, self.trace_cache, project_id)
+            base_graph = self._build_base_graph(snapshot)
             await self._cache_base_graph(project_id, base_graph)
         graph = self._with_alert_counts(base_graph, alert_counts or {})
         node = next(
@@ -111,13 +114,16 @@ class TopologyService:
                 pass
         return {"success": True}
 
-    def _build_base_graph(self, project_id: str) -> dict[str, Any]:
+    def _build_base_graph(
+        self,
+        snapshot: list[tuple[str, list[SpanSummary]]],
+    ) -> dict[str, Any]:
         edge_stats: dict[tuple[str, str], dict[str, float]] = defaultdict(
             lambda: {"count": 0.0, "error_count": 0.0, "latency_total": 0.0}
         )
         node_ids: set[str] = set()
 
-        for _trace_id, spans in self.trace_cache.snapshot(project_id):
+        for _trace_id, spans in snapshot:
             span_by_id = {span.spanId: span for span in spans if span.spanId}
             for span in spans:
                 if span.service:
