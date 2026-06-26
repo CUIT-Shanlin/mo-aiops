@@ -222,6 +222,7 @@ async def test_alert_stats_counts_by_status_and_severity(
             "active": 2,
             "byStatus": {"firing": 2, "resolved": 1},
             "bySeverity": {"critical": 2, "warning": 1},
+            "activeBySeverity": {"critical": 1, "warning": 1},
         },
     }
 

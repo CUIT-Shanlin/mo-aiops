@@ -5,6 +5,7 @@ from sqlalchemy import select, text
 from app.collectors.models import SpanSummary
 from app.core.projects import ProjectConfig, ProjectsConfig
 from app.models.audit_log import AuditLog
+from app.repositories.alerts import AlertEventCreate, AlertEventRepository
 from app.repositories.users import UserCreate, UserRepository
 
 
@@ -479,3 +480,28 @@ async def test_dashboard_stats_fallback_to_redis_metrics(client, make_jwt, app_i
     assert data["tcpConnections"] == 8800
     assert data["messageTps"] == 12600
     assert data["p99Latency"] == 73
+
+
+async def test_health_score_uses_active_only_severity(client, make_jwt, app_instance):
+    """Health-score must ignore resolved alerts; only active severities drive the formula."""
+    await _clean(app_instance)
+    _set_projects(app_instance)
+    headers = _headers(make_jwt(role="admin"))
+
+    async with app_instance.state.sessionmaker() as session:
+        repo = AlertEventRepository(session, "prod")
+        # 2 active critical (firing)
+        await repo.create(AlertEventCreate(name="CritA", fingerprint="fp-crit-1", severity="critical", status="firing"))
+        await repo.create(AlertEventCreate(name="CritB", fingerprint="fp-crit-2", severity="critical", status="firing"))
+        # 1 active warning (firing)
+        await repo.create(AlertEventCreate(name="WarnA", fingerprint="fp-warn-1", severity="warning", status="firing"))
+        # 5 resolved critical — must NOT drag down score
+        for i in range(5):
+            await repo.create(AlertEventCreate(name=f"OldCrit{i}", fingerprint=f"fp-old-crit-{i}", severity="critical", status="resolved"))
+        await session.commit()
+
+    resp = await client.get("/api/v1/dashboard/health-score", headers=headers)
+    data = resp.json()["data"]
+
+    # Formula: 100 - 2*25 - 1*10 = 40
+    assert data["score"] == 40, f"expected 40 (active-only), got {data['score']}"

@@ -51,9 +51,10 @@ async def dashboard_health_score(
 ) -> dict[str, Any]:
     async with request.app.state.sessionmaker() as session:
         alert_stats = await AlertEventRepository(session, project_id).stats()
+    active = alert_stats["activeBySeverity"]
     score = max(
         0,
-        100 - alert_stats["critical"] * 25 - alert_stats["bySeverity"].get("warning", 0) * 10,
+        100 - active.get("critical", 0) * 25 - active.get("warning", 0) * 10,
     )
     return success({"score": score, "trend": [{"time": _short_time(), "score": score}]})
 

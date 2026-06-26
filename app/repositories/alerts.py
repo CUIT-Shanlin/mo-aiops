@@ -230,8 +230,19 @@ class AlertEventRepository(ProjectScopedRepository):
                 )
             )
         ).all()
+        active_severity_rows = (
+            await self.session.execute(
+                self.scope(
+                    select(AlertEvent.severity, func.count())
+                    .select_from(AlertEvent)
+                    .where(AlertEvent.status.in_(ACTIVE_ALERT_STATUSES))
+                    .group_by(AlertEvent.severity)
+                )
+            )
+        ).all()
         by_status = {str(status): int(count) for status, count in status_rows}
         by_severity = {str(severity): int(count) for severity, count in severity_rows}
+        active_by_severity = {str(severity): int(count) for severity, count in active_severity_rows}
         total = sum(by_status.values())
         duplicate_count = await self._duplicate_count()
         received_count = total + duplicate_count
@@ -247,6 +258,7 @@ class AlertEventRepository(ProjectScopedRepository):
             "active": sum(by_status.get(status, 0) for status in ACTIVE_ALERT_STATUSES),
             "byStatus": by_status,
             "bySeverity": by_severity,
+            "activeBySeverity": active_by_severity,
         }
 
     async def list_active_for_grouping(self) -> builtins.list[AlertEvent]:
