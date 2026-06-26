@@ -8,6 +8,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Query, Request
 
 from app.api.alerts import _alert_to_dict, require_project_id
+from app.collectors.metric_store import load_metric_values
 from app.core.constants import RedisKey
 from app.core.security import CurrentUser, get_current_user
 from app.repositories.agent_runs import AgentRunRepository
@@ -27,7 +28,7 @@ async def dashboard_stats(
     async with request.app.state.sessionmaker() as session:
         alert_stats = await AlertEventRepository(session, project_id).stats()
         healing_stats = await HealActionRepository(session, project_id).stats()
-    metrics = _latest_metrics(request, project_id)
+    metrics = await _latest_metrics(request, project_id)
     return success(
         {
             "alertCount": alert_stats["active"],
@@ -63,7 +64,7 @@ async def dashboard_metric_series(
     _current_user: Annotated[CurrentUser, Depends(get_current_user)],
     project_id: Annotated[str, Depends(require_project_id)],
 ) -> dict[str, Any]:
-    metrics = _latest_metrics(request, project_id)
+    metrics = await _latest_metrics(request, project_id)
     return success(
         [
             _series("消息吞吐量 (msg/s)", "area", metrics.get("msg.throughput", 0)),
@@ -154,11 +155,10 @@ async def dashboard_service_chain(
     )
 
 
-def _latest_metrics(request: Request, project_id: str) -> dict[str, float]:
+async def _latest_metrics(request: Request, project_id: str) -> dict[str, float]:
     store = getattr(request.app.state, "metric_window_store", None)
-    if store is None:
-        return {}
-    return {sample.canonicalName: sample.value for sample in store.snapshot(project_id)}
+    redis = getattr(request.app.state, "redis", None)
+    return await load_metric_values(redis, store, project_id)
 
 
 def _series(title: str, chart_type: str, value: float) -> dict[str, Any]:

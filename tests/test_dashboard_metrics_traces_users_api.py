@@ -459,3 +459,23 @@ async def test_users_filters_and_ban_unban_update_local_user(
     assert filtered_page.json()["data"]["items"][0]["id"] == "admin"
     assert unbanned.json()["data"] == {"success": True}
     assert detail.json()["data"]["isBanned"] is False
+
+
+async def test_dashboard_stats_fallback_to_redis_metrics(client, make_jwt, app_instance):
+    from app.collectors.metric_store import save_metric_snapshot
+
+    await _clean(app_instance)
+    _set_projects(app_instance)
+    # 内存 metric store 不写，只写 Redis 快照
+    await save_metric_snapshot(
+        app_instance.state.redis,
+        "prod",
+        {"conn.active": 8800.0, "msg.throughput": 12600.0, "msg.p99_latency": 73.0, "mq.backlog": 12.0},
+    )
+    headers = _headers(make_jwt(role="admin"))
+
+    resp = await client.get("/api/v1/dashboard/stats", headers=headers)
+    data = resp.json()["data"]
+    assert data["tcpConnections"] == 8800
+    assert data["messageTps"] == 12600
+    assert data["p99Latency"] == 73

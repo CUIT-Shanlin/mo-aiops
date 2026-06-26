@@ -7,7 +7,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Query, Request
 
 from app.api.alerts import require_project_id
-from app.collectors.windows import MetricWindowStore
+from app.collectors.metric_store import load_metric_values
 from app.core.security import CurrentUser, get_current_user
 from app.schemas.response import success
 
@@ -55,7 +55,7 @@ async def metric_categories(
     _current_user: Annotated[CurrentUser, Depends(get_current_user)],
     project_id: Annotated[str, Depends(require_project_id)],
 ) -> dict[str, Any]:
-    values = _latest_metrics(request, project_id)
+    values = await _latest_metrics(request, project_id)
     return success(
         [
             {
@@ -88,15 +88,14 @@ async def metric_series(
     step: str | None = Query(default=None),
 ) -> dict[str, Any]:
     _ = (time_range, step)
-    value = round(float(_latest_metrics(request, project_id).get(name, 0)), 2)
+    value = round(float((await _latest_metrics(request, project_id)).get(name, 0)), 2)
     return success([{"time": datetime.now(UTC).strftime("%H:%M"), "value": value, "baseline": value}])
 
 
-def _latest_metrics(request: Request, project_id: str) -> dict[str, float]:
+async def _latest_metrics(request: Request, project_id: str) -> dict[str, float]:
     store = getattr(request.app.state, "metric_window_store", None)
-    if not isinstance(store, MetricWindowStore):
-        return {}
-    return {sample.canonicalName: sample.value for sample in store.snapshot(project_id)}
+    redis = getattr(request.app.state, "redis", None)
+    return await load_metric_values(redis, store, project_id)
 
 
 def _format_value(value: float) -> str:
