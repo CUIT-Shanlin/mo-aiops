@@ -77,20 +77,28 @@ async def test_seed_demo_creates_demo_data_for_current_project(
     assert counts["logs"] >= 2
 
     async with app_instance.state.sessionmaker() as session:
-        alert = (
+        firing = (
             await session.execute(
-                select(AlertEvent).where(AlertEvent.project_id == "prod")
+                select(AlertEvent).where(
+                    AlertEvent.project_id == "prod",
+                    AlertEvent.status == "firing",
+                )
             )
-        ).scalar_one()
+        ).scalars().first()
         run = (
             await session.execute(
-                select(AgentRun).where(AgentRun.project_id == "prod")
+                select(AgentRun).where(
+                    AgentRun.project_id == "prod",
+                    AgentRun.status == "completed",
+                )
             )
-        ).scalar_one()
-        assert alert.status == "firing"
-        assert alert.service == "message-service"
-        assert "JVM" in alert.name
-        assert run.status == "completed"
+        ).scalars().first()
+        assert firing is not None
+        assert firing.service in {
+            "access-gateway", "api-service", "call-service",
+            "message-service", "multimedia-service", "persistence-service",
+        }
+        assert run is not None
         assert run.evidence_chain
         assert run.timeline
         assert run.root_cause_summary
@@ -100,7 +108,7 @@ async def test_seed_demo_creates_demo_data_for_current_project(
     )
     logs = json.loads(raw_logs)
     assert len(logs) >= 2
-    assert any("OutOfMemoryError" in item["message"] for item in logs)
+    assert any(item["level"] == "ERROR" for item in logs)
 
 
 async def test_seed_demo_requires_auth_and_project(
@@ -264,3 +272,43 @@ async def test_seed_demo_is_disabled_in_production(monkeypatch, make_jwt):
             )
             is None
         )
+
+
+async def test_seed_demo_creates_bulk_dataset_and_redis_snapshots(
+    app_instance,
+    client,
+    auth_headers,
+    seed_projects_config,
+):
+    response = await client.post("/api/v1/seeds/demo", headers=auth_headers, json={"reset": True})
+    assert response.status_code == 200
+    counts = response.json()["data"]
+    assert counts["alerts"] >= 100
+    assert counts["agentRuns"] >= 40
+    assert counts["healActions"] >= 50
+    assert counts["notifications"] >= 20
+    assert counts["auditLogs"] >= 50
+    assert counts["logs"] >= 100
+    assert counts["traces"] >= 40
+    assert counts["metrics"] >= 5
+
+    # 6 个服务都应出现在告警里
+    async with app_instance.state.sessionmaker() as session:
+        rows = (
+            await session.execute(
+                select(AlertEvent.service).where(AlertEvent.project_id == "prod")
+            )
+        ).scalars().all()
+    services = set(rows)
+    assert {
+        "access-gateway", "api-service", "call-service",
+        "message-service", "multimedia-service", "persistence-service",
+    } <= services
+
+    # traces / metrics 已写 Redis
+    raw_traces = await app_instance.state.redis.get(RedisKey.of("prod", RedisKey.TRACES))
+    raw_metrics = await app_instance.state.redis.get(RedisKey.of("prod", RedisKey.METRICS_SNAPSHOT))
+    assert raw_traces is not None
+    assert raw_metrics is not None
+    recent_logs = await app_instance.state.redis.get(RedisKey.of("prod", RedisKey.RECENT_LOGS))
+    assert recent_logs is not None
