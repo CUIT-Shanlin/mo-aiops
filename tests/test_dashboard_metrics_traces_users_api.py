@@ -356,6 +356,37 @@ async def test_users_list_stats_detail_use_local_users_table(
     assert detail.json()["data"]["riskLevel"] == "normal"
 
 
+async def test_traces_routes_fallback_to_redis_when_memory_empty(client, make_jwt, app_instance):
+    from app.collectors.models import SpanSummary
+    from app.collectors.trace_store import save_trace_snapshot
+
+    _set_projects(app_instance)
+    # 内存 trace_cache 保持空，只写 Redis
+    await save_trace_snapshot(
+        app_instance.state.redis,
+        "prod",
+        [
+            (
+                "redis-trace",
+                [
+                    SpanSummary(traceId="redis-trace", spanId="s1", service="access-gateway", name="recv", durationMs=10),
+                    SpanSummary(traceId="redis-trace", spanId="s2", parentSpanId="s1", service="api-service", name="route", durationMs=20, status="error"),
+                ],
+            )
+        ],
+    )
+    headers = _headers(make_jwt(role="admin"))
+
+    traces = await client.get("/api/v1/traces", headers=headers)
+    detail = await client.get("/api/v1/traces/redis-trace", headers=headers)
+    services = await client.get("/api/v1/traces/services", headers=headers)
+
+    assert traces.json()["data"]["total"] == 1
+    assert traces.json()["data"]["items"][0]["traceId"] == "redis-trace"
+    assert detail.json()["data"]["traceId"] == "redis-trace"
+    assert services.json()["data"] == ["access-gateway", "api-service"]
+
+
 async def test_users_filters_and_ban_unban_update_local_user(
     client,
     make_jwt,

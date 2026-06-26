@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Query, Request
 
 from app.api.alerts import require_project_id
 from app.collectors.models import SpanSummary
+from app.collectors.trace_store import load_trace_snapshot
 from app.core.constants import ErrorCode
 from app.core.security import CurrentUser, get_current_user
 from app.schemas.response import APIError, success
@@ -34,7 +35,7 @@ async def list_traces(
     _ = time_range
     rows = [
         _trace_summary(current_trace_id, spans)
-        for current_trace_id, spans in _snapshot(request, project_id)
+        for current_trace_id, spans in await _snapshot(request, project_id)
     ]
     rows = [
         row
@@ -64,7 +65,7 @@ async def trace_services(
     services = sorted(
         {
             span.service
-            for _, spans in _snapshot(request, project_id)
+            for _, spans in await _snapshot(request, project_id)
             for span in spans
             if span.service
         }
@@ -79,7 +80,7 @@ async def trace_detail(
     _current_user: Annotated[CurrentUser, Depends(get_current_user)],
     project_id: Annotated[str, Depends(require_project_id)],
 ) -> dict[str, Any]:
-    spans = _get_trace(request, project_id, trace_id)
+    spans = await _get_trace(request, project_id, trace_id)
     return success({**_trace_summary(trace_id, spans), "spans": [_span_to_dict(span) for span in spans]})
 
 
@@ -90,7 +91,7 @@ async def trace_spans(
     _current_user: Annotated[CurrentUser, Depends(get_current_user)],
     project_id: Annotated[str, Depends(require_project_id)],
 ) -> dict[str, Any]:
-    spans = _get_trace(request, project_id, trace_id)
+    spans = await _get_trace(request, project_id, trace_id)
     offset = 0.0
     rows = []
     for span in spans:
@@ -108,19 +109,17 @@ async def trace_spans(
     return success(rows)
 
 
-def _snapshot(request: Request, project_id: str) -> list[tuple[str, list[SpanSummary]]]:
+async def _snapshot(request: Request, project_id: str) -> list[tuple[str, list[SpanSummary]]]:
     cache = getattr(request.app.state, "trace_cache", None)
-    if cache is None:
-        return []
-    return list(cache.snapshot(project_id))
+    redis = getattr(request.app.state, "redis", None)
+    return await load_trace_snapshot(redis, cache, project_id)
 
 
-def _get_trace(request: Request, project_id: str, trace_id: str) -> list[SpanSummary]:
-    cache = getattr(request.app.state, "trace_cache", None)
-    spans = cache.get(project_id, trace_id) if cache is not None else None
-    if spans is None:
-        raise APIError(ErrorCode.NOT_FOUND, "Trace 不存在")
-    return spans
+async def _get_trace(request: Request, project_id: str, trace_id: str) -> list[SpanSummary]:
+    for current_trace_id, spans in await _snapshot(request, project_id):
+        if current_trace_id == trace_id:
+            return spans
+    raise APIError(ErrorCode.NOT_FOUND, "Trace 不存在")
 
 
 def _trace_summary(trace_id: str, spans: list[SpanSummary]) -> dict[str, Any]:
